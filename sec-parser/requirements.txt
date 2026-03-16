@@ -1,0 +1,19 @@
+# SEC File Parser Service dependencies
+
+# API framework
+fastapi==0.115.11
+uvicorn==0.29.0
+pydantic==2.10.6
+python-dotenv==1.0.1
+
+# SEC pipeline
+beautifulsoup4>=4.12.0
+pdfplumber>=0.11.0
+img2table>=1.4.2
+numba
+camelot-py[base]
+opencv-contrib-python-headless>=4
+pypdfium2==4.30.0
+tiktoken
+requests==2.32.3
+python-multipart>=0.0.9

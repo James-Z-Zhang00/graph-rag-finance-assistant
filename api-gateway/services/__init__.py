@@ -1,0 +1,1 @@
+# This file is left empty to let other programs treat `service` as a package and prevent runtime errors
