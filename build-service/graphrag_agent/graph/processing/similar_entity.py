@@ -53,7 +53,8 @@ class SimilarEntityDetector:
         self.config = config or GDSConfig()
         self.gds = GraphDataScience(
             self.config.uri,
-            auth=(self.config.username, self.config.password)
+            auth=(self.config.username, self.config.password),
+            aura_ds=True
         )
         self.graph = connection_manager.get_connection()
         self.projection_name = "entities"

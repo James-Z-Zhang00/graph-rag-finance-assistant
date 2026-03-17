@@ -78,7 +78,8 @@ class IndexCommunityBuilder:
             # Initialize graph database connection
             self.gds = GraphDataScience(
                 NEO4J_CONFIG["uri"],
-                auth=(NEO4J_CONFIG["username"], NEO4J_CONFIG["password"])
+                auth=(NEO4J_CONFIG["username"], NEO4J_CONFIG["password"]),
+                aura_ds=True
             )
             db_manager = get_db_manager()
             self.graph = db_manager.graph
