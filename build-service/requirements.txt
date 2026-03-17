@@ -16,7 +16,7 @@ langchain_openai==0.3.9
 
 # Neo4j
 neo4j>=5.0.0
-graphdatascience>=1.6
+graphdatascience>=1.8
 
 # Data
 numpy==1.26.2
