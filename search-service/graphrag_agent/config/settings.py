@@ -205,13 +205,17 @@ CACHE_SETTINGS = {
 NEO4J_URI = os.getenv("NEO4J_URI", "")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 NEO4J_MAX_POOL_SIZE = _get_env_int("NEO4J_MAX_POOL_SIZE", 10) or 10
 NEO4J_REFRESH_SCHEMA = _get_env_bool("NEO4J_REFRESH_SCHEMA", False)
+AURA_INSTANCEID = os.getenv("AURA_INSTANCEID", "")
+AURA_INSTANCENAME = os.getenv("AURA_INSTANCENAME", "")
 
 NEO4J_CONFIG = {
     "uri": NEO4J_URI,
     "username": NEO4J_USERNAME,
     "password": NEO4J_PASSWORD,
+    "database": NEO4J_DATABASE,
     "max_pool_size": NEO4J_MAX_POOL_SIZE,
     "refresh_schema": NEO4J_REFRESH_SCHEMA,
 }
