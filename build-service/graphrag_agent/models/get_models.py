@@ -10,6 +10,7 @@ from graphrag_agent.config.settings import (
     TIKTOKEN_CACHE_DIR,
     OPENAI_EMBEDDING_CONFIG,
     OPENAI_LLM_CONFIG,
+    OPENAI_BASE_URL,
 )
 
 
@@ -21,13 +22,33 @@ def setup_cache():
 
 setup_cache()
 
+
+def _llm_gateway_auth_headers() -> dict:
+    """Return a Bearer identity token header when running on Cloud Run, empty dict locally."""
+    if not os.getenv("K_SERVICE"):
+        return {}
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2 import id_token
+        # Audience is the llm-gateway base URL (strip /v1 suffix)
+        audience = OPENAI_BASE_URL.rstrip("/")
+        if audience.endswith("/v1"):
+            audience = audience[:-3]
+        token = id_token.fetch_id_token(Request(), audience)
+        return {"Authorization": f"Bearer {token}"}
+    except Exception:
+        return {}
+
+
 def get_embeddings_model():
     config = {k: v for k, v in OPENAI_EMBEDDING_CONFIG.items() if v}
+    config["default_headers"] = _llm_gateway_auth_headers()
     return OpenAIEmbeddings(**config)
 
 
 def get_llm_model():
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
+    config["default_headers"] = _llm_gateway_auth_headers()
     return ChatOpenAI(**config)
 
 def get_stream_llm_model():
@@ -36,7 +57,7 @@ def get_stream_llm_model():
     manager = AsyncCallbackManager(handlers=[callback_handler])
 
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
-    config.update({"streaming": True, "callbacks": manager})
+    config.update({"streaming": True, "callbacks": manager, "default_headers": _llm_gateway_auth_headers()})
     return ChatOpenAI(**config)
 
 def count_tokens(text):
