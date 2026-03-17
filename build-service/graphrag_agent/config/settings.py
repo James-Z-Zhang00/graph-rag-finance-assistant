@@ -207,10 +207,11 @@ CACHE_SETTINGS = {
 # ===== Neo4j Connection Configuration =====
 
 NEO4J_URI = os.getenv("NEO4J_URI", "")
-AURA_INSTANCEID = os.getenv("AURA_INSTANCEID", "4d69d75e")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
+AURA_INSTANCEID = os.getenv("AURA_INSTANCEID", "")
+AURA_INSTANCENAME = os.getenv("AURA_INSTANCENAME", "")
 NEO4J_MAX_POOL_SIZE = _get_env_int("NEO4J_MAX_POOL_SIZE", 10) or 10
 NEO4J_REFRESH_SCHEMA = _get_env_bool("NEO4J_REFRESH_SCHEMA", False)
 
