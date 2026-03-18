@@ -23,6 +23,19 @@ from graphrag_agent.config.settings import MAX_WORKERS, ENTITY_BATCH_SIZE, GDS_M
 import shutup
 shutup.please()
 
+# Aura Graph Analytics is versionless — patch server_version() to return a
+# fixed value instead of calling gds.version which Aura rejects.
+# Aura rejects gds.version() with "Aura Graph Analytics is versionless", causing
+# GraphDataScience() to fail on init. The library's aura_ds=True parameter is supposed
+# to skip this check and return a fixed version (2.5.0), but it doesn't work reliably
+# across versions. This patch replicates that behavior directly.
+try:
+    from graphdatascience.query_runner.neo4j_query_runner import Neo4jQueryRunner as _NQR
+    from graphdatascience.server_version.server_version import ServerVersion as _SV
+    _NQR.server_version = lambda self: _SV(2, 5, 0)
+except Exception:
+    pass
+
 class IndexCommunityBuilder:
     """
     Index and community builder, responsible for post-processing after the base graph is built.
