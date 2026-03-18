@@ -36,33 +36,28 @@ try:
 except Exception:
     pass
 
-def _make_arrow_info_patch(cls):
-    """Return a patched classmethod for ArrowInfo.create that handles Aura's missing gds.debug.arrow()."""
-    _orig = cls.create.__func__
-    @classmethod
-    def _patched(klass, query_runner):
-        try:
-            return _orig(klass, query_runner)
-        except Exception:
-            # Aura doesn't support gds.debug.arrow() — return a disabled ArrowInfo
-            # so GraphDataScience skips Arrow Flight client construction entirely
-            obj = object.__new__(klass)
-            obj.enabled = False
-            obj.running = False
-            obj.listenAddress = ""
-            obj.versions = []
-            return obj
-    return _patched
-
-# Patch both known import paths — the location changed between library versions
+# Patch both known import paths for ArrowInfo.create — the location changed between
+# library versions. Aura doesn't support gds.debug.arrow() so we always return a
+# disabled ArrowInfo, skipping Arrow Flight client construction entirely.
+import importlib as _il
 for _arrow_info_path in (
     "graphdatascience.query_runner.arrow_info",
     "graphdatascience.arrow_client.arrow_info",
 ):
     try:
-        import importlib as _il
         _mod = _il.import_module(_arrow_info_path)
-        _mod.ArrowInfo.create = _make_arrow_info_patch(_mod.ArrowInfo)
+        _cls = _mod.ArrowInfo
+
+        def _disabled_create(_query_runner, _klass=_cls):
+            obj = object.__new__(_klass)
+            obj.enabled = False
+            obj.running = False
+            obj.listenAddress = ""
+            obj.versions = []
+            return obj
+
+        # create may be a staticmethod or classmethod depending on version
+        _cls.create = staticmethod(_disabled_create)
     except Exception:
         pass
 
