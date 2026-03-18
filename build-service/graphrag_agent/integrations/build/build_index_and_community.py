@@ -36,29 +36,35 @@ try:
 except Exception:
     pass
 
-try:
-    # Import path changed between versions — try both
-    try:
-        from graphdatascience.arrow_client.arrow_info import ArrowInfo as _AI
-    except ImportError:
-        from graphdatascience.query_runner.arrow_info import ArrowInfo as _AI
-    _orig_ai_create = _AI.create.__func__
+def _make_arrow_info_patch(cls):
+    """Return a patched classmethod for ArrowInfo.create that handles Aura's missing gds.debug.arrow()."""
+    _orig = cls.create.__func__
     @classmethod
-    def _patched_ai_create(cls, query_runner):
+    def _patched(klass, query_runner):
         try:
-            return _orig_ai_create(cls, query_runner)
+            return _orig(klass, query_runner)
         except Exception:
             # Aura doesn't support gds.debug.arrow() — return a disabled ArrowInfo
             # so GraphDataScience skips Arrow Flight client construction entirely
-            obj = object.__new__(cls)
+            obj = object.__new__(klass)
             obj.enabled = False
             obj.running = False
             obj.listenAddress = ""
             obj.versions = []
             return obj
-    _AI.create = _patched_ai_create
-except Exception:
-    pass
+    return _patched
+
+# Patch both known import paths — the location changed between library versions
+for _arrow_info_path in (
+    "graphdatascience.query_runner.arrow_info",
+    "graphdatascience.arrow_client.arrow_info",
+):
+    try:
+        import importlib as _il
+        _mod = _il.import_module(_arrow_info_path)
+        _mod.ArrowInfo.create = _make_arrow_info_patch(_mod.ArrowInfo)
+    except Exception:
+        pass
 
 class IndexCommunityBuilder:
     """
