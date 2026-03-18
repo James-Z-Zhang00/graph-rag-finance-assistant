@@ -25,14 +25,38 @@ shutup.please()
 
 # Aura Graph Analytics is versionless — patch server_version() to return a
 # fixed value instead of calling gds.version which Aura rejects.
-# Aura rejects gds.version() with "Aura Graph Analytics is versionless", causing
-# GraphDataScience() to fail on init. The library's aura_ds=True parameter is supposed
-# to skip this check and return a fixed version (2.5.0), but it doesn't work reliably
-# across versions. This patch replicates that behavior directly.
+# Aura rejects gds.version() with "Aura Graph Analytics is versionless", and also
+# doesn't support gds.debug.arrow(), causing GraphDataScience() to fail on init.
+# The library's aura_ds=True parameter is supposed to skip both checks, but it doesn't
+# work reliably across versions. These patches replicate that behavior directly.
 try:
     from graphdatascience.query_runner.neo4j_query_runner import Neo4jQueryRunner as _NQR
     from graphdatascience.server_version.server_version import ServerVersion as _SV
     _NQR.server_version = lambda self: _SV(2, 5, 0)
+except Exception:
+    pass
+
+try:
+    # Import path changed between versions — try both
+    try:
+        from graphdatascience.arrow_client.arrow_info import ArrowInfo as _AI
+    except ImportError:
+        from graphdatascience.query_runner.arrow_info import ArrowInfo as _AI
+    _orig_ai_create = _AI.create.__func__
+    @classmethod
+    def _patched_ai_create(cls, query_runner):
+        try:
+            return _orig_ai_create(cls, query_runner)
+        except Exception:
+            # Aura doesn't support gds.debug.arrow() — return a disabled ArrowInfo
+            # so GraphDataScience skips Arrow Flight client construction entirely
+            obj = object.__new__(cls)
+            obj.enabled = False
+            obj.running = False
+            obj.listenAddress = ""
+            obj.versions = []
+            return obj
+    _AI.create = _patched_ai_create
 except Exception:
     pass
 
