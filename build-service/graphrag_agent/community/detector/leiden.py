@@ -8,85 +8,116 @@ class LeidenDetector(GraphProjectionMixin, BaseCommunityDetector):
     """Community detection implementation using the Leiden algorithm."""
 
     def detect_communities(self) -> Dict[str, Any]:
-        """Run Leiden algorithm community detection."""
-        if not self.G:
-            raise ValueError("Please create the graph projection first")
+        """Run Label Propagation Algorithm for community detection (pure Cypher, Aura-compatible).
+        Replaces gds.leiden.write() which requires GDS unavailable on AuraDB Free.
+        Result is written to e.communities as a list for save_communities() compatibility.
+        """
+        print("Starting Label Propagation community detection (pure Cypher)...")
 
-        print("Starting Leiden community detection...")
+        # Initialize: each entity gets its own unique community ID
+        self.graph.query("""
+            MATCH (e:`__Entity__`)
+            SET e.community_lpa = id(e)
+        """)
 
-        try:
-            # Check connected components
-            wcc = self.gds.wcc.stats(self.G)
-            print(f"Graph contains {wcc.get('componentCount', 0)} connected components")
+        # Iteratively propagate: each node adopts the most common community among its neighbours
+        max_iterations = 10
+        for i in range(max_iterations):
+            result = self.graph.query("""
+                MATCH (e:`__Entity__`)
+                OPTIONAL MATCH (e)--(n:`__Entity__`)
+                WITH e, n.community_lpa AS lbl
+                WHERE lbl IS NOT NULL
+                WITH e, lbl, count(*) AS freq
+                ORDER BY freq DESC, lbl ASC
+                WITH e, collect(lbl)[0] AS best_label
+                WHERE best_label IS NOT NULL AND best_label <> e.community_lpa
+                SET e.community_lpa = best_label
+                RETURN count(*) AS updates
+            """)
+            updates = result[0]['updates'] if result else 0
+            print(f"  LPA iteration {i + 1}: {updates} updates")
+            if updates == 0:
+                print(f"  Converged after {i + 1} iterations")
+                break
 
-            # Execute Leiden algorithm
-            result = self.gds.leiden.write(
-                self.G,
-                writeProperty="communities",
-                includeIntermediateCommunities=True,
-                relationshipWeightProperty="weight",
-                **self._get_optimized_leiden_params()
-            )
+        # Convert to list format — save_communities() reads e.communities[0] for level 0
+        self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.community_lpa IS NOT NULL
+            SET e.communities = [e.community_lpa]
+            REMOVE e.community_lpa
+        """)
 
-            return {
-                'componentCount': wcc.get('componentCount', 0),
-                'componentDistribution': wcc.get('componentDistribution', {}),
-                'communityCount': result.get('communityCount', 0),
-                'modularity': result.get('modularity', 0),
-                'ranLevels': result.get('ranLevels', 0)
-            }
+        result = self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.communities IS NOT NULL
+            RETURN count(DISTINCT e.communities[0]) AS communityCount
+        """)
+        community_count = result[0]['communityCount'] if result else 0
+        print(f"LPA complete: {community_count} communities detected")
 
-        except Exception as e:
-            print(f"Leiden algorithm failed: {e}")
-            return self._execute_fallback_leiden()
+        return {
+            'communityCount': community_count,
+            'componentCount': community_count,
+            'modularity': 0.0,
+            'ranLevels': 1
+        }
 
-    def _execute_fallback_leiden(self) -> Dict[str, Any]:
-        """Execute fallback Leiden algorithm."""
-        print("Trying with fallback parameters...")
+    # [GDS] def detect_communities_gds(self) -> Dict[str, Any]:
+    # [GDS]     """Run Leiden algorithm community detection (requires GDS)."""
+    # [GDS]     if not self.G:
+    # [GDS]         raise ValueError("Please create the graph projection first")
+    # [GDS]     print("Starting Leiden community detection...")
+    # [GDS]     try:
+    # [GDS]         wcc = self.gds.wcc.stats(self.G)
+    # [GDS]         print(f"Graph contains {wcc.get('componentCount', 0)} connected components")
+    # [GDS]         result = self.gds.leiden.write(
+    # [GDS]             self.G,
+    # [GDS]             writeProperty="communities",
+    # [GDS]             includeIntermediateCommunities=True,
+    # [GDS]             relationshipWeightProperty="weight",
+    # [GDS]             **self._get_optimized_leiden_params()
+    # [GDS]         )
+    # [GDS]         return {
+    # [GDS]             'componentCount': wcc.get('componentCount', 0),
+    # [GDS]             'componentDistribution': wcc.get('componentDistribution', {}),
+    # [GDS]             'communityCount': result.get('communityCount', 0),
+    # [GDS]             'modularity': result.get('modularity', 0),
+    # [GDS]             'ranLevels': result.get('ranLevels', 0)
+    # [GDS]         }
+    # [GDS]     except Exception as e:
+    # [GDS]         print(f"Leiden algorithm failed: {e}")
+    # [GDS]         return self._execute_fallback_leiden()
 
-        try:
-            result = self.gds.leiden.write(
-                self.G,
-                writeProperty="communities",
-                includeIntermediateCommunities=False,
-                gamma=0.5,
-                tolerance=0.001,
-                maxLevels=2,
-                concurrency=1
-            )
+    # [GDS] def _execute_fallback_leiden(self) -> Dict[str, Any]:
+    # [GDS]     print("Trying with fallback parameters...")
+    # [GDS]     try:
+    # [GDS]         result = self.gds.leiden.write(
+    # [GDS]             self.G,
+    # [GDS]             writeProperty="communities",
+    # [GDS]             includeIntermediateCommunities=False,
+    # [GDS]             gamma=0.5,
+    # [GDS]             tolerance=0.001,
+    # [GDS]             maxLevels=2,
+    # [GDS]             concurrency=1
+    # [GDS]         )
+    # [GDS]         return {
+    # [GDS]             'communityCount': result.get('communityCount', 0),
+    # [GDS]             'modularity': result.get('modularity', 0),
+    # [GDS]             'ranLevels': result.get('ranLevels', 0),
+    # [GDS]             'note': 'Used fallback parameters'
+    # [GDS]         }
+    # [GDS]     except Exception as e:
+    # [GDS]         raise ValueError(f"Leiden algorithm failed: {e}")
 
-            return {
-                'communityCount': result.get('communityCount', 0),
-                'modularity': result.get('modularity', 0),
-                'ranLevels': result.get('ranLevels', 0),
-                'note': 'Used fallback parameters'
-            }
-        except Exception as e:
-            raise ValueError(f"Leiden algorithm failed: {e}")
-
-    def _get_optimized_leiden_params(self) -> Dict[str, Any]:
-        """Get optimized Leiden algorithm parameters."""
-        if self.memory_mb > 32 * 1024:  # >32GB
-            return {
-                'gamma': 1.0,
-                'tolerance': 0.0001,
-                'maxLevels': 10,
-                'concurrency': GDS_CONCURRENCY
-            }
-        elif self.memory_mb > 16 * 1024:  # >16GB
-            return {
-                'gamma': 1.0,
-                'tolerance': 0.0005,
-                'maxLevels': 5,
-                'concurrency': max(1, GDS_CONCURRENCY - 1)
-            }
-        else:  # Low-memory system
-            return {
-                'gamma': 0.8,
-                'tolerance': 0.001,
-                'maxLevels': 3,
-                'concurrency': max(1, GDS_CONCURRENCY // 2)
-            }
+    # [GDS] def _get_optimized_leiden_params(self) -> Dict[str, Any]:
+    # [GDS]     if self.memory_mb > 32 * 1024:
+    # [GDS]         return {'gamma': 1.0, 'tolerance': 0.0001, 'maxLevels': 10, 'concurrency': GDS_CONCURRENCY}
+    # [GDS]     elif self.memory_mb > 16 * 1024:
+    # [GDS]         return {'gamma': 1.0, 'tolerance': 0.0005, 'maxLevels': 5, 'concurrency': max(1, GDS_CONCURRENCY - 1)}
+    # [GDS]     else:
+    # [GDS]         return {'gamma': 0.8, 'tolerance': 0.001, 'maxLevels': 3, 'concurrency': max(1, GDS_CONCURRENCY // 2)}
 
     def save_communities(self) -> Dict[str, int]:
         """Save community detection results from the Leiden algorithm."""

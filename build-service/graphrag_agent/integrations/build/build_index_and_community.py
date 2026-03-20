@@ -15,7 +15,7 @@ from graphrag_agent.graph import EntityMerger
 from graphrag_agent.graph.processing import EntityQualityProcessor
 from graphrag_agent.community import CommunityDetectorFactory
 from graphrag_agent.community import CommunitySummarizerFactory
-from graphdatascience import GraphDataScience
+# [GDS] from graphdatascience import GraphDataScience  # GDS - commented out for Aura Free compatibility
 
 from graphrag_agent.config.neo4jdb import get_db_manager
 from graphrag_agent.config.settings import MAX_WORKERS, ENTITY_BATCH_SIZE, GDS_MEMORY_LIMIT, NEO4J_CONFIG
@@ -23,43 +23,37 @@ from graphrag_agent.config.settings import MAX_WORKERS, ENTITY_BATCH_SIZE, GDS_M
 import shutup
 shutup.please()
 
-# Aura Graph Analytics is versionless — patch server_version() to return a
-# fixed value instead of calling gds.version which Aura rejects.
-# Aura rejects gds.version() with "Aura Graph Analytics is versionless", and also
-# doesn't support gds.debug.arrow(), causing GraphDataScience() to fail on init.
-# The library's aura_ds=True parameter is supposed to skip both checks, but it doesn't
-# work reliably across versions. These patches replicate that behavior directly.
-try:
-    from graphdatascience.query_runner.neo4j_query_runner import Neo4jQueryRunner as _NQR
-    from graphdatascience.server_version.server_version import ServerVersion as _SV
-    _NQR.server_version = lambda self: _SV(2, 5, 0)
-except Exception:
-    pass
-
-# Patch both known import paths for ArrowInfo.create — the location changed between
-# library versions. Aura doesn't support gds.debug.arrow() so we always return a
-# disabled ArrowInfo, skipping Arrow Flight client construction entirely.
-import importlib as _il
-for _arrow_info_path in (
-    "graphdatascience.query_runner.arrow_info",
-    "graphdatascience.arrow_client.arrow_info",
-):
-    try:
-        _mod = _il.import_module(_arrow_info_path)
-        _cls = _mod.ArrowInfo
-
-        def _disabled_create(_query_runner, _klass=_cls):
-            obj = object.__new__(_klass)
-            obj.enabled = False
-            obj.running = False
-            obj.listenAddress = ""
-            obj.versions = []
-            return obj
-
-        # create may be a staticmethod or classmethod depending on version
-        _cls.create = staticmethod(_disabled_create)
-    except Exception:
-        pass
+# [GDS] Aura compatibility patches — no longer needed since GraphDataScience is not instantiated.
+# [GDS] Re-enable these if switching back to GDS on Aura.
+#
+# [GDS] try:
+# [GDS]     from graphdatascience.query_runner.neo4j_query_runner import Neo4jQueryRunner as _NQR
+# [GDS]     from graphdatascience.server_version.server_version import ServerVersion as _SV
+# [GDS]     # Aura rejects gds.version() with "Aura Graph Analytics is versionless".
+# [GDS]     # Patch server_version() to return a hardcoded value so init doesn't fail.
+# [GDS]     _NQR.server_version = lambda self: _SV(2, 5, 0)
+# [GDS] except Exception:
+# [GDS]     pass
+#
+# [GDS] import importlib as _il
+# [GDS] for _arrow_info_path in (
+# [GDS]     "graphdatascience.query_runner.arrow_info",
+# [GDS]     "graphdatascience.arrow_client.arrow_info",
+# [GDS] ):
+# [GDS]     try:
+# [GDS]         _mod = _il.import_module(_arrow_info_path)
+# [GDS]         _cls = _mod.ArrowInfo
+# [GDS]         def _disabled_create(_query_runner, _klass=_cls):
+# [GDS]             obj = object.__new__(_klass)
+# [GDS]             obj.enabled = False
+# [GDS]             obj.running = False
+# [GDS]             obj.listenAddress = ""
+# [GDS]             obj.versions = []
+# [GDS]             return obj
+# [GDS]         # create may be a staticmethod or classmethod depending on version
+# [GDS]         _cls.create = staticmethod(_disabled_create)
+# [GDS]     except Exception:
+# [GDS]         pass
 
 class IndexCommunityBuilder:
     """
@@ -114,11 +108,11 @@ class IndexCommunityBuilder:
             task = progress.add_task("[cyan]Initializing components...", total=4)
 
             # Initialize graph database connection
-            self.gds = GraphDataScience(
-                NEO4J_CONFIG["uri"],
-                auth=(NEO4J_CONFIG["username"], NEO4J_CONFIG["password"]),
-                aura_ds=True
-            )
+            # [GDS] self.gds = GraphDataScience(  # GDS - commented out for Aura Free compatibility
+            # [GDS]     NEO4J_CONFIG["uri"],
+            # [GDS]     auth=(NEO4J_CONFIG["username"], NEO4J_CONFIG["password"]),
+            # [GDS]     aura_ds=True
+            # [GDS] )
             db_manager = get_db_manager()
             self.graph = db_manager.graph
             progress.advance(task)
@@ -275,8 +269,8 @@ class IndexCommunityBuilder:
             # Create detector via factory
             detector = CommunityDetectorFactory.create(
                 algorithm=community_algorithm,
-                gds=self.gds,
                 graph=self.graph
+                # [GDS] gds=self.gds  # re-enable when switching back to GDS
             )
             community_results = detector.process()
 

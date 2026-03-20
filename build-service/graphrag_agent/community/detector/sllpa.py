@@ -8,76 +8,104 @@ class SLLPADetector(GraphProjectionMixin, BaseCommunityDetector):
     """Community detection implementation using the SLLPA algorithm."""
 
     def detect_communities(self) -> Dict[str, Any]:
-        """Run SLLPA algorithm community detection."""
-        if not self.G:
-            raise ValueError("Please create the graph projection first")
+        """Run Label Propagation Algorithm for community detection (pure Cypher, Aura-compatible).
+        Replaces gds.sllpa.write() which requires GDS unavailable on AuraDB Free.
+        Result is written to e.communityIds as a list for save_communities() compatibility.
+        """
+        print("Starting Label Propagation community detection (pure Cypher, SLLPA replacement)...")
 
-        print("Starting SLLPA community detection...")
+        # Initialize: each entity gets its own unique community ID
+        self.graph.query("""
+            MATCH (e:`__Entity__`)
+            SET e.community_lpa = id(e)
+        """)
 
-        try:
-            # Execute SLLPA algorithm
-            result = self.gds.sllpa.write(
-                self.G,
-                writeProperty="communityIds",
-                **self._get_optimized_sllpa_params()
-            )
+        # Iteratively propagate: each node adopts the most common community among its neighbours
+        max_iterations = 10
+        for i in range(max_iterations):
+            result = self.graph.query("""
+                MATCH (e:`__Entity__`)
+                OPTIONAL MATCH (e)--(n:`__Entity__`)
+                WITH e, n.community_lpa AS lbl
+                WHERE lbl IS NOT NULL
+                WITH e, lbl, count(*) AS freq
+                ORDER BY freq DESC, lbl ASC
+                WITH e, collect(lbl)[0] AS best_label
+                WHERE best_label IS NOT NULL AND best_label <> e.community_lpa
+                SET e.community_lpa = best_label
+                RETURN count(*) AS updates
+            """)
+            updates = result[0]['updates'] if result else 0
+            print(f"  LPA iteration {i + 1}: {updates} updates")
+            if updates == 0:
+                print(f"  Converged after {i + 1} iterations")
+                break
 
-            community_count = result.get('communityCount', 0)
-            iterations = result.get('iterations', 0)
+        # Convert to list format — save_communities() reads e.communityIds
+        self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.community_lpa IS NOT NULL
+            SET e.communityIds = [e.community_lpa]
+            REMOVE e.community_lpa
+        """)
 
-            print(f"SLLPA complete: {community_count} communities, "
-                  f"{iterations} iterations")
+        result = self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.communityIds IS NOT NULL
+            RETURN count(DISTINCT e.communityIds[0]) AS communityCount
+        """)
+        community_count = result[0]['communityCount'] if result else 0
+        print(f"LPA complete: {community_count} communities detected")
 
-            return {
-                'communityCount': community_count,
-                'iterations': iterations
-            }
+        return {
+            'communityCount': community_count,
+            'iterations': max_iterations
+        }
 
-        except Exception as e:
-            print(f"SLLPA algorithm failed: {e}")
-            return self._execute_fallback_sllpa()
+    # [GDS] def detect_communities_gds(self) -> Dict[str, Any]:
+    # [GDS]     """Run SLLPA algorithm community detection (requires GDS)."""
+    # [GDS]     if not self.G:
+    # [GDS]         raise ValueError("Please create the graph projection first")
+    # [GDS]     print("Starting SLLPA community detection...")
+    # [GDS]     try:
+    # [GDS]         result = self.gds.sllpa.write(
+    # [GDS]             self.G,
+    # [GDS]             writeProperty="communityIds",
+    # [GDS]             **self._get_optimized_sllpa_params()
+    # [GDS]         )
+    # [GDS]         community_count = result.get('communityCount', 0)
+    # [GDS]         iterations = result.get('iterations', 0)
+    # [GDS]         print(f"SLLPA complete: {community_count} communities, {iterations} iterations")
+    # [GDS]         return {'communityCount': community_count, 'iterations': iterations}
+    # [GDS]     except Exception as e:
+    # [GDS]         print(f"SLLPA algorithm failed: {e}")
+    # [GDS]         return self._execute_fallback_sllpa()
 
-    def _execute_fallback_sllpa(self) -> Dict[str, Any]:
-        """Execute fallback SLLPA algorithm."""
-        print("Trying with fallback parameters...")
+    # [GDS] def _execute_fallback_sllpa(self) -> Dict[str, Any]:
+    # [GDS]     print("Trying with fallback parameters...")
+    # [GDS]     try:
+    # [GDS]         result = self.gds.sllpa.write(
+    # [GDS]             self.G,
+    # [GDS]             writeProperty="communityIds",
+    # [GDS]             maxIterations=50,
+    # [GDS]             minAssociationStrength=0.2,
+    # [GDS]             concurrency=1
+    # [GDS]         )
+    # [GDS]         return {
+    # [GDS]             'communityCount': result.get('communityCount', 0),
+    # [GDS]             'iterations': result.get('iterations', 0),
+    # [GDS]             'note': 'Used fallback parameters'
+    # [GDS]         }
+    # [GDS]     except Exception as e:
+    # [GDS]         raise ValueError(f"SLLPA algorithm failed: {e}")
 
-        try:
-            result = self.gds.sllpa.write(
-                self.G,
-                writeProperty="communityIds",
-                maxIterations=50,        # Reduce iteration count
-                minAssociationStrength=0.2,  # Increase threshold
-                concurrency=1            # Single-thread execution
-            )
-
-            return {
-                'communityCount': result.get('communityCount', 0),
-                'iterations': result.get('iterations', 0),
-                'note': 'Used fallback parameters'
-            }
-        except Exception as e:
-            raise ValueError(f"SLLPA algorithm failed: {e}")
-
-    def _get_optimized_sllpa_params(self) -> Dict[str, Any]:
-        """Get optimized SLLPA parameters."""
-        if self.memory_mb > 32 * 1024:  # >32GB
-            return {
-                'maxIterations': 100,
-                'minAssociationStrength': 0.05,
-                'concurrency': GDS_CONCURRENCY
-            }
-        elif self.memory_mb > 16 * 1024:  # >16GB
-            return {
-                'maxIterations': 80,
-                'minAssociationStrength': 0.08,
-                'concurrency': max(1, GDS_CONCURRENCY - 1)
-            }
-        else:  # Low memory
-            return {
-                'maxIterations': 50,
-                'minAssociationStrength': 0.1,
-                'concurrency': max(1, GDS_CONCURRENCY // 2)
-            }
+    # [GDS] def _get_optimized_sllpa_params(self) -> Dict[str, Any]:
+    # [GDS]     if self.memory_mb > 32 * 1024:
+    # [GDS]         return {'maxIterations': 100, 'minAssociationStrength': 0.05, 'concurrency': GDS_CONCURRENCY}
+    # [GDS]     elif self.memory_mb > 16 * 1024:
+    # [GDS]         return {'maxIterations': 80, 'minAssociationStrength': 0.08, 'concurrency': max(1, GDS_CONCURRENCY - 1)}
+    # [GDS]     else:
+    # [GDS]         return {'maxIterations': 50, 'minAssociationStrength': 0.1, 'concurrency': max(1, GDS_CONCURRENCY // 2)}
 
     def save_communities(self) -> Dict[str, int]:
         """Save SLLPA algorithm results."""

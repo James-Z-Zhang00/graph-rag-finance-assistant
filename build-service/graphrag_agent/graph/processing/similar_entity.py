@@ -1,5 +1,5 @@
 import time
-from graphdatascience import GraphDataScience
+# [GDS] from graphdatascience import GraphDataScience  # GDS - commented out for Aura Free compatibility
 from typing import Tuple, List, Any, Dict
 from dataclasses import dataclass
 
@@ -51,14 +51,14 @@ class SimilarEntityDetector:
             config: GDS configuration parameters including connection info and algorithm thresholds
         """
         self.config = config or GDSConfig()
-        self.gds = GraphDataScience(
-            self.config.uri,
-            auth=(self.config.username, self.config.password),
-            aura_ds=True
-        )
+        # [GDS] self.gds = GraphDataScience(
+        # [GDS]     self.config.uri,
+        # [GDS]     auth=(self.config.username, self.config.password),
+        # [GDS]     aura_ds=True
+        # [GDS] )
         self.graph = connection_manager.get_connection()
-        self.projection_name = "entities"
-        self.G = None
+        # [GDS] self.projection_name = "entities"
+        # [GDS] self.G = None
 
         # Performance monitoring
         self.projection_time = 0
@@ -78,62 +78,40 @@ class SimilarEntityDetector:
 
         connection_manager.create_multiple_indexes(index_queries)
 
-    @timer
-    def create_entity_projection(self) -> Tuple[Any, Dict[str, Any]]:
-        """
-        Create an in-memory projection subgraph of entities.
-
-        Returns:
-            Tuple[Any, Dict[str, Any]]: Projection graph object and result info
-        """
-        start_time = time.time()
-
-        # Drop any existing projection first
-        try:
-            self.gds.graph.drop(self.projection_name, failIfMissing=False)
-        except Exception as e:
-            print(f"Error dropping existing projection (ignorable): {e}")
-
-        # Get total entity count
-        entity_count = self._get_entity_count()
-        if entity_count == 0:
-            print("No valid entity nodes found. Ensure data has been imported correctly.")
-            return None, {"status": "error", "message": "No entities found"}
-
-        # Create the new projection graph
-        try:
-            self.G, result = self.gds.graph.project(
-                self.projection_name,          # Graph name
-                "__Entity__",                  # Node projection
-                "*",                           # Relationship projection (all types)
-                nodeProperties=["embedding"]    # Configuration parameters
-            )
-        except Exception as e:
-            print(f"Error creating projection: {e}")
-            # Try a more conservative configuration
-            try:
-                print("Retrying projection with conservative configuration...")
-                config = {
-                    "nodeProjection": {"__Entity__": {"properties": ["embedding"]}},
-                    "relationshipProjection": {"*": {"orientation": "UNDIRECTED"}},
-                    "nodeProperties": ["embedding"]
-                }
-                self.G, result = self.gds.graph.project(
-                    self.projection_name,
-                    config
-                )
-            except Exception as e2:
-                print(f"Second attempt also failed: {e2}")
-                return None, {"status": "error", "message": str(e2)}
-
-        self.projection_time = time.time() - start_time
-
-        if self.G:
-            print(f"Projection created successfully in {self.projection_time:.2f}s")
-            return self.G, result
-        else:
-            print("Projection creation failed")
-            return None, {"status": "error", "message": "Failed to create projection"}
+    # [GDS] @timer
+    # [GDS] def create_entity_projection(self) -> Tuple[Any, Dict[str, Any]]:
+    # [GDS]     """Create an in-memory GDS projection subgraph of entities (requires GDS)."""
+    # [GDS]     start_time = time.time()
+    # [GDS]     try:
+    # [GDS]         self.gds.graph.drop(self.projection_name, failIfMissing=False)
+    # [GDS]     except Exception as e:
+    # [GDS]         print(f"Error dropping existing projection (ignorable): {e}")
+    # [GDS]     entity_count = self._get_entity_count()
+    # [GDS]     if entity_count == 0:
+    # [GDS]         print("No valid entity nodes found.")
+    # [GDS]         return None, {"status": "error", "message": "No entities found"}
+    # [GDS]     try:
+    # [GDS]         self.G, result = self.gds.graph.project(
+    # [GDS]             self.projection_name, "__Entity__", "*", nodeProperties=["embedding"]
+    # [GDS]         )
+    # [GDS]     except Exception as e:
+    # [GDS]         print(f"Error creating projection: {e}")
+    # [GDS]         try:
+    # [GDS]             print("Retrying projection with conservative configuration...")
+    # [GDS]             config = {
+    # [GDS]                 "nodeProjection": {"__Entity__": {"properties": ["embedding"]}},
+    # [GDS]                 "relationshipProjection": {"*": {"orientation": "UNDIRECTED"}},
+    # [GDS]                 "nodeProperties": ["embedding"]
+    # [GDS]             }
+    # [GDS]             self.G, result = self.gds.graph.project(self.projection_name, config)
+    # [GDS]         except Exception as e2:
+    # [GDS]             print(f"Second attempt also failed: {e2}")
+    # [GDS]             return None, {"status": "error", "message": str(e2)}
+    # [GDS]     self.projection_time = time.time() - start_time
+    # [GDS]     if self.G:
+    # [GDS]         print(f"Projection created successfully in {self.projection_time:.2f}s")
+    # [GDS]         return self.G, result
+    # [GDS]     return None, {"status": "error", "message": "Failed to create projection"}
 
     def _get_entity_count(self) -> int:
         """
@@ -153,146 +131,153 @@ class SimilarEntityDetector:
 
     @timer
     def detect_similar_entities(self) -> Dict[str, Any]:
+        """Detect similar entities using the vector index (pure Cypher, Aura-compatible).
+        Replaces gds.knn which requires GDS unavailable on AuraDB Free.
+        Uses db.index.vector.queryNodes() on the existing entity embedding vector index.
         """
-        Detect similar entities using the KNN algorithm and create SIMILAR relationships.
-
-        Returns:
-            Dict[str, Any]: Algorithm result statistics
-        """
-        if not self.G:
-            raise ValueError("Please create the entity projection first")
-
         start_time = time.time()
-        print("Starting similar entity detection...")
+        top_k = max(1, self.config.top_k)
+        print(f"Starting similar entity detection via vector index (top_k={top_k}, threshold={self.config.similarity_threshold})...")
 
         try:
-            top_k = max(1, self.config.top_k)
-            # Use KNN algorithm to find similar entities
-            mutate_result = self.gds.knn.mutate(
-                self.G,
-                nodeProperties=['embedding'],
-                mutateRelationshipType='SIMILAR',
-                mutateProperty='score',
-                similarityCutoff=self.config.similarity_threshold,
-                topK=top_k
+            result = self.graph.query(
+                """
+                MATCH (e:`__Entity__`)
+                WHERE e.embedding IS NOT NULL
+                CALL db.index.vector.queryNodes('vector', $topK, e.embedding)
+                YIELD node AS similar, score
+                WHERE similar <> e AND score >= $threshold
+                MERGE (e)-[r:SIMILAR]->(similar)
+                ON CREATE SET r.score = score
+                ON MATCH SET r.score = CASE WHEN r.score < score THEN score ELSE r.score END
+                RETURN count(*) AS relationshipsWritten
+                """,
+                params={
+                    'topK': top_k,
+                    'threshold': self.config.similarity_threshold
+                }
             )
-
-            # Write KNN results to the database
-            write_result = self.gds.knn.write(
-                self.G,
-                nodeProperties=['embedding'],
-                writeRelationshipType='SIMILAR',
-                writeProperty='score',
-                similarityCutoff=self.config.similarity_threshold,
-                topK=top_k
-            )
-
             self.knn_time = time.time() - start_time
-            print(f"KNN complete: wrote {write_result['relationshipsWritten']} relationships in {self.knn_time:.2f}s")
-
+            relationships_written = result[0]['relationshipsWritten'] if result else 0
+            print(f"Vector similarity complete: {relationships_written} SIMILAR relationships in {self.knn_time:.2f}s")
             return {
                 "status": "success",
-                "relationshipsWritten": write_result['relationshipsWritten'],
+                "relationshipsWritten": relationships_written,
                 "knnTime": self.knn_time
             }
 
         except Exception as e:
-            print(f"KNN algorithm failed: {e}")
-            # Try with fallback parameters
-            try:
-                print("Retrying KNN with fallback parameters...")
-                fallback_top_k = max(1, top_k // 2)
-                fallback_params = {
-                    "nodeProperties": ["embedding"],
-                    "writeRelationshipType": "SIMILAR",
-                    "writeProperty": "score",
-                    "similarityCutoff": self.config.similarity_threshold,
-                    "topK": fallback_top_k,
-                    "sampleRate": 0.5  # Reduce sample rate
-                }
+            print(f"Vector similarity detection failed: {e}")
+            return {"status": "error", "message": str(e)}
 
-                fallback_result = self.gds.knn.write(self.G, **fallback_params)
-                self.knn_time = time.time() - start_time
-
-                print(f"Fallback KNN complete: wrote {fallback_result['relationshipsWritten']} relationships in {self.knn_time:.2f}s")
-
-                return {
-                    "status": "success",
-                    "relationshipsWritten": fallback_result['relationshipsWritten'],
-                    "knnTime": self.knn_time,
-                    "note": "Used fallback parameters"
-                }
-
-            except Exception as e2:
-                print(f"Fallback KNN also failed: {e2}")
-                return {
-                    "status": "error",
-                    "message": str(e)
-                }
+    # [GDS] @timer
+    # [GDS] def detect_similar_entities_gds(self) -> Dict[str, Any]:
+    # [GDS]     """Detect similar entities using KNN algorithm (requires GDS)."""
+    # [GDS]     if not self.G:
+    # [GDS]         raise ValueError("Please create the entity projection first")
+    # [GDS]     start_time = time.time()
+    # [GDS]     print("Starting similar entity detection...")
+    # [GDS]     try:
+    # [GDS]         top_k = max(1, self.config.top_k)
+    # [GDS]         mutate_result = self.gds.knn.mutate(
+    # [GDS]             self.G, nodeProperties=['embedding'], mutateRelationshipType='SIMILAR',
+    # [GDS]             mutateProperty='score', similarityCutoff=self.config.similarity_threshold, topK=top_k
+    # [GDS]         )
+    # [GDS]         write_result = self.gds.knn.write(
+    # [GDS]             self.G, nodeProperties=['embedding'], writeRelationshipType='SIMILAR',
+    # [GDS]             writeProperty='score', similarityCutoff=self.config.similarity_threshold, topK=top_k
+    # [GDS]         )
+    # [GDS]         self.knn_time = time.time() - start_time
+    # [GDS]         print(f"KNN complete: wrote {write_result['relationshipsWritten']} relationships in {self.knn_time:.2f}s")
+    # [GDS]         return {"status": "success", "relationshipsWritten": write_result['relationshipsWritten'], "knnTime": self.knn_time}
+    # [GDS]     except Exception as e:
+    # [GDS]         print(f"KNN algorithm failed: {e}")
+    # [GDS]         try:
+    # [GDS]             print("Retrying KNN with fallback parameters...")
+    # [GDS]             fallback_top_k = max(1, self.config.top_k // 2)
+    # [GDS]             fallback_result = self.gds.knn.write(
+    # [GDS]                 self.G, nodeProperties=["embedding"], writeRelationshipType="SIMILAR",
+    # [GDS]                 writeProperty="score", similarityCutoff=self.config.similarity_threshold,
+    # [GDS]                 topK=fallback_top_k, sampleRate=0.5
+    # [GDS]             )
+    # [GDS]             self.knn_time = time.time() - start_time
+    # [GDS]             return {"status": "success", "relationshipsWritten": fallback_result['relationshipsWritten'],
+    # [GDS]                     "knnTime": self.knn_time, "note": "Used fallback parameters"}
+    # [GDS]         except Exception as e2:
+    # [GDS]             return {"status": "error", "message": str(e)}
 
     @timer
     def detect_communities(self) -> Dict[str, Any]:
+        """Detect communities using iterative Cypher WCC (pure Cypher, Aura-compatible).
+        Replaces gds.wcc.write() which requires GDS unavailable on AuraDB Free.
+        Propagates minimum component ID through SIMILAR relationships until convergence.
         """
-        Detect communities using the WCC algorithm and write results to the wcc node property.
-
-        Returns:
-            Dict[str, Any]: Community detection result statistics
-        """
-        if not self.G:
-            raise ValueError("Please create the entity projection first")
-
         start_time = time.time()
-        print("Starting community detection...")
+        print("Starting community detection via iterative Cypher WCC...")
 
-        try:
-            # Use WCC algorithm
-            result = self.gds.wcc.write(
-                self.G,
-                writeProperty="wcc",
-                relationshipTypes=["SIMILAR"],
-                consecutiveIds=True
-            )
+        # Initialize: each entity gets its own component ID
+        self.graph.query("""
+            MATCH (e:`__Entity__`)
+            SET e.wcc = id(e)
+        """)
 
-            self.wcc_time = time.time() - start_time
+        # Propagate minimum component ID through SIMILAR relationships until stable
+        max_iterations = 20
+        for i in range(max_iterations):
+            result = self.graph.query("""
+                MATCH (e:`__Entity__`)-[:SIMILAR]-(n:`__Entity__`)
+                WITH e, min(n.wcc) AS min_wcc
+                WHERE min_wcc < e.wcc
+                SET e.wcc = min_wcc
+                RETURN count(*) AS updates
+            """)
+            updates = result[0]['updates'] if result else 0
+            if updates == 0:
+                print(f"  WCC converged after {i + 1} iterations")
+                break
 
-            community_count = result.get("communityCount", 0)
-            print(f"Community detection complete: found {community_count} communities in {self.wcc_time:.2f}s")
+        self.wcc_time = time.time() - start_time
 
-            return {
-                "status": "success",
-                "communityCount": community_count,
-                "wccTime": self.wcc_time
-            }
+        result = self.graph.query("""
+            MATCH (e:`__Entity__`)
+            WHERE e.wcc IS NOT NULL
+            RETURN count(DISTINCT e.wcc) AS communityCount
+        """)
+        community_count = result[0]['communityCount'] if result else 0
+        print(f"WCC complete: {community_count} communities in {self.wcc_time:.2f}s")
 
-        except Exception as e:
-            print(f"WCC algorithm failed: {e}")
-            # Try with fallback parameters
-            try:
-                print("Retrying WCC with fallback parameters...")
-                fallback_result = self.gds.wcc.write(
-                    self.G,
-                    writeProperty="wcc",
-                    relationshipTypes=["SIMILAR"]
-                )
+        return {
+            "status": "success",
+            "communityCount": community_count,
+            "wccTime": self.wcc_time
+        }
 
-                self.wcc_time = time.time() - start_time
-                community_count = fallback_result.get("communityCount", 0)
-
-                print(f"Fallback WCC complete: found {community_count} communities in {self.wcc_time:.2f}s")
-
-                return {
-                    "status": "success",
-                    "communityCount": community_count,
-                    "wccTime": self.wcc_time,
-                    "note": "Used fallback parameters"
-                }
-
-            except Exception as e2:
-                print(f"Fallback WCC also failed: {e2}")
-                return {
-                    "status": "error",
-                    "message": str(e)
-                }
+    # [GDS] @timer
+    # [GDS] def detect_communities_gds(self) -> Dict[str, Any]:
+    # [GDS]     """Detect communities using WCC algorithm (requires GDS)."""
+    # [GDS]     if not self.G:
+    # [GDS]         raise ValueError("Please create the entity projection first")
+    # [GDS]     start_time = time.time()
+    # [GDS]     print("Starting community detection...")
+    # [GDS]     try:
+    # [GDS]         result = self.gds.wcc.write(
+    # [GDS]             self.G, writeProperty="wcc", relationshipTypes=["SIMILAR"], consecutiveIds=True
+    # [GDS]         )
+    # [GDS]         self.wcc_time = time.time() - start_time
+    # [GDS]         community_count = result.get("communityCount", 0)
+    # [GDS]         print(f"Community detection complete: found {community_count} communities in {self.wcc_time:.2f}s")
+    # [GDS]         return {"status": "success", "communityCount": community_count, "wccTime": self.wcc_time}
+    # [GDS]     except Exception as e:
+    # [GDS]         print(f"WCC algorithm failed: {e}")
+    # [GDS]         try:
+    # [GDS]             print("Retrying WCC with fallback parameters...")
+    # [GDS]             fallback_result = self.gds.wcc.write(self.G, writeProperty="wcc", relationshipTypes=["SIMILAR"])
+    # [GDS]             self.wcc_time = time.time() - start_time
+    # [GDS]             community_count = fallback_result.get("communityCount", 0)
+    # [GDS]             return {"status": "success", "communityCount": community_count,
+    # [GDS]                     "wccTime": self.wcc_time, "note": "Used fallback parameters"}
+    # [GDS]         except Exception as e2:
+    # [GDS]             return {"status": "error", "message": str(e)}
 
     @timer
     def find_potential_duplicates(self) -> List[Any]:
@@ -396,14 +381,13 @@ class SimilarEntityDetector:
         duplicates = []
 
         try:
-            # 1. Create entity projection
-            self.G, projection_result = self.create_entity_projection()
+            # [GDS] 1. Create entity projection (not needed for pure Cypher)
+            # [GDS] self.G, projection_result = self.create_entity_projection()
+            # [GDS] if not self.G:
+            # [GDS]     print("Entity projection creation failed — cannot continue")
+            # [GDS]     return [], {"status": "error", "message": "Projection creation failed"}
 
-            if not self.G:
-                print("Entity projection creation failed — cannot continue")
-                return [], {"status": "error", "message": "Projection creation failed"}
-
-            # 2. Detect similar entities
+            # 1. Detect similar entities via vector index
             knn_result = self.detect_similar_entities()
 
             if knn_result.get('status') == 'error':
@@ -446,6 +430,6 @@ class SimilarEntityDetector:
             print(f"Error during entity processing: {e}")
             return [], {"status": "error", "message": str(e)}
 
-        finally:
-            # Always clean up the projection graph
-            self.cleanup()
+        # [GDS] finally:
+        # [GDS]     # Always clean up the in-memory GDS projection graph
+        # [GDS]     self.cleanup()
