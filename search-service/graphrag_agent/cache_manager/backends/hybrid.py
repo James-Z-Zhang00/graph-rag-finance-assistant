@@ -5,12 +5,18 @@ from .disk import DiskCacheBackend
 
 
 class HybridCacheBackend(CacheStorageBackend):
-    """Hybrid cache backend — memory (L1) + disk (L2)."""
+    """Hybrid cache backend — memory (L1) + configurable L2 (disk by default, or any CacheStorageBackend)."""
 
-    def __init__(self, cache_dir: str = "./cache", memory_max_size: int = 100, disk_max_size: int = 1000):
-        """Initialize the hybrid cache backend."""
+    def __init__(self, cache_dir: str = "./cache", memory_max_size: int = 100, disk_max_size: int = 1000,
+                 l2_backend: Optional[CacheStorageBackend] = None):
+        """Initialize the hybrid cache backend.
+
+        Args:
+            l2_backend: Optional L2 backend override. Defaults to DiskCacheBackend.
+                        Pass an UpstashRedisCacheBackend here to use Redis as L2.
+        """
         self.memory_cache = MemoryCacheBackend(max_size=memory_max_size)
-        self.disk_cache = DiskCacheBackend(cache_dir=cache_dir, max_size=disk_max_size)
+        self.disk_cache = l2_backend or DiskCacheBackend(cache_dir=cache_dir, max_size=disk_max_size)
         self.memory_hits = 0
         self.disk_hits = 0
         self.misses = 0

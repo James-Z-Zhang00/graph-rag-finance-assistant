@@ -55,7 +55,7 @@ class BaseAgent(ABC):
         self._setup_graph()
 
     def _init_upstash_cache(self) -> None:
-        """Initialize session and global cache managers backed by Upstash Redis + Vector."""
+        """Initialize session and global cache managers backed by memory (L1) + Upstash Redis (L2) + Upstash Vector (L3)."""
         from graphrag_agent.cache_manager.backends.upstash_redis_backend import UpstashRedisCacheBackend
         from graphrag_agent.cache_manager.vector_similarity.upstash_vector_matcher import UpstashVectorMatcher
 
@@ -67,10 +67,14 @@ class BaseAgent(ABC):
         similarity_threshold = UPSTASH_SETTINGS["similarity_threshold"]
 
         # Session-local cache (per conversation thread)
+        # L1: memory, L2: Redis, L3: Upstash Vector
         self.cache_manager = CacheManager(
             key_strategy=ContextAwareCacheKeyStrategy(),
-            storage_backend=UpstashRedisCacheBackend(
-                url=redis_url, token=redis_token, namespace="session", ttl=ttl
+            storage_backend=HybridCacheBackend(
+                l2_backend=UpstashRedisCacheBackend(
+                    url=redis_url, token=redis_token, namespace="session", ttl=ttl
+                ),
+                memory_max_size=200,
             ),
             vector_matcher=UpstashVectorMatcher(
                 url=vector_url, token=vector_token,
@@ -80,10 +84,14 @@ class BaseAgent(ABC):
         )
 
         # Global cross-session cache (shared across all conversations)
+        # L1: memory, L2: Redis, L3: Upstash Vector
         self.global_cache_manager = CacheManager(
             key_strategy=GlobalCacheKeyStrategy(),
-            storage_backend=UpstashRedisCacheBackend(
-                url=redis_url, token=redis_token, namespace="global", ttl=ttl
+            storage_backend=HybridCacheBackend(
+                l2_backend=UpstashRedisCacheBackend(
+                    url=redis_url, token=redis_token, namespace="global", ttl=ttl
+                ),
+                memory_max_size=500,
             ),
             vector_matcher=UpstashVectorMatcher(
                 url=vector_url, token=vector_token,
@@ -92,7 +100,7 @@ class BaseAgent(ABC):
             enable_vector_similarity=True,
         )
 
-        print("[Cache] Using Upstash Redis + Vector backend")
+        print("[Cache] Using memory (L1) + Upstash Redis (L2) + Upstash Vector (L3) backend")
 
     def _init_local_cache(self, cache_dir: str, memory_only: bool) -> None:
         """Initialize session and global cache managers backed by local memory + disk + FAISS."""
