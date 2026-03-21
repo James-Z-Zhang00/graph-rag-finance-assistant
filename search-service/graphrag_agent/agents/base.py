@@ -16,7 +16,7 @@ from graphrag_agent.cache_manager.manager import (
     HybridCacheBackend
 )
 from graphrag_agent.cache_manager.strategies.global_strategy import GlobalCacheKeyStrategy
-from graphrag_agent.config.settings import AGENT_SETTINGS
+from graphrag_agent.config.settings import AGENT_SETTINGS, CACHE_BACKEND_TYPE, UPSTASH_SETTINGS
 
 class BaseAgent(ABC):
     """Agent base class defining common functionality and interfaces"""
@@ -41,7 +41,62 @@ class BaseAgent(ABC):
         self.memory = MemorySaver()
         self.execution_log = []
 
-        # Standard context-aware cache (within session)
+        if CACHE_BACKEND_TYPE == "upstash":
+            self._init_upstash_cache()
+        else:
+            self._init_local_cache(cache_dir, memory_only)
+
+        self.performance_metrics = {}  # Performance metrics collection
+
+        # Initialize tools
+        self.tools = self._setup_tools()
+
+        # Set up workflow graph
+        self._setup_graph()
+
+    def _init_upstash_cache(self) -> None:
+        """Initialize session and global cache managers backed by Upstash Redis + Vector."""
+        from graphrag_agent.cache_manager.backends.upstash_redis_backend import UpstashRedisCacheBackend
+        from graphrag_agent.cache_manager.vector_similarity.upstash_vector_matcher import UpstashVectorMatcher
+
+        redis_url = UPSTASH_SETTINGS["redis_url"]
+        redis_token = UPSTASH_SETTINGS["redis_token"]
+        vector_url = UPSTASH_SETTINGS["vector_url"]
+        vector_token = UPSTASH_SETTINGS["vector_token"]
+        ttl = UPSTASH_SETTINGS["ttl"]
+        similarity_threshold = UPSTASH_SETTINGS["similarity_threshold"]
+
+        # Session-local cache (per conversation thread)
+        self.cache_manager = CacheManager(
+            key_strategy=ContextAwareCacheKeyStrategy(),
+            storage_backend=UpstashRedisCacheBackend(
+                url=redis_url, token=redis_token, namespace="session", ttl=ttl
+            ),
+            vector_matcher=UpstashVectorMatcher(
+                url=vector_url, token=vector_token,
+                namespace="session", similarity_threshold=similarity_threshold
+            ),
+            enable_vector_similarity=True,
+        )
+
+        # Global cross-session cache (shared across all conversations)
+        self.global_cache_manager = CacheManager(
+            key_strategy=GlobalCacheKeyStrategy(),
+            storage_backend=UpstashRedisCacheBackend(
+                url=redis_url, token=redis_token, namespace="global", ttl=ttl
+            ),
+            vector_matcher=UpstashVectorMatcher(
+                url=vector_url, token=vector_token,
+                namespace="global", similarity_threshold=similarity_threshold
+            ),
+            enable_vector_similarity=True,
+        )
+
+        print("[Cache] Using Upstash Redis + Vector backend")
+
+    def _init_local_cache(self, cache_dir: str, memory_only: bool) -> None:
+        """Initialize session and global cache managers backed by local memory + disk + FAISS."""
+        # Session-local cache (per conversation thread)
         self.cache_manager = CacheManager(
             key_strategy=ContextAwareCacheKeyStrategy(),
             storage_backend=HybridCacheBackend(
@@ -53,7 +108,7 @@ class BaseAgent(ABC):
             memory_only=memory_only
         )
 
-        # Global cache (cross-session)
+        # Global cross-session cache (shared across all conversations)
         self.global_cache_manager = CacheManager(
             key_strategy=GlobalCacheKeyStrategy(),
             storage_backend=HybridCacheBackend(
@@ -65,13 +120,7 @@ class BaseAgent(ABC):
             memory_only=memory_only
         )
 
-        self.performance_metrics = {}  # Performance metrics collection
-
-        # Initialize tools
-        self.tools = self._setup_tools()
-
-        # Set up workflow graph
-        self._setup_graph()
+        print("[Cache] Using local memory + disk + FAISS backend")
 
     @abstractmethod
     def _setup_tools(self) -> List:

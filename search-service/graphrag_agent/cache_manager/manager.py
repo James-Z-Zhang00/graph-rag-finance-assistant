@@ -23,7 +23,8 @@ class CacheManager:
                  thread_safe: Optional[bool] = None,
                  enable_vector_similarity: Optional[bool] = None,
                  similarity_threshold: Optional[float] = None,
-                 max_vectors: Optional[int] = None):
+                 max_vectors: Optional[int] = None,
+                 vector_matcher=None):
         """
         Args:
             key_strategy: Cache key generation strategy.
@@ -68,9 +69,12 @@ class CacheManager:
         # Wrap with thread-safety decorator if requested
         self.storage = ThreadSafeCacheBackend(backend) if thread_safe else backend
 
-        # Vector similarity matcher
+        # Vector similarity matcher — accept an externally constructed matcher
+        # (e.g. UpstashVectorMatcher) or build the default local FAISS matcher.
         self.enable_vector_similarity = enable_vector_similarity
-        if enable_vector_similarity:
+        if vector_matcher is not None:
+            self.vector_matcher = vector_matcher
+        elif enable_vector_similarity:
             Path(cache_dir).mkdir(parents=True, exist_ok=True)
 
             vector_index_file = f"{cache_dir}/vector_index" if not memory_only else None

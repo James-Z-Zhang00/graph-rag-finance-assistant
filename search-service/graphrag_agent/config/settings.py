@@ -200,6 +200,24 @@ CACHE_SETTINGS = {
     "max_vectors": _get_env_int("CACHE_MAX_VECTORS", 10000) or 10000,
 }
 
+# ===== Cloud Cache Backend Configuration =====
+
+# CACHE_BACKEND: "local" (default) uses HybridCacheBackend + FAISS
+#                "upstash" uses Upstash Redis + Upstash Vector
+CACHE_BACKEND_TYPE = _get_env_choice("CACHE_BACKEND", {"local", "upstash"}, "local")
+
+UPSTASH_SETTINGS = {
+    "redis_url": os.getenv("UPSTASH_REDIS_REST_URL", ""),
+    "redis_token": os.getenv("UPSTASH_REDIS_REST_TOKEN", ""),
+    "vector_url": os.getenv("UPSTASH_VECTOR_REST_URL", ""),
+    "vector_token": os.getenv("UPSTASH_VECTOR_REST_TOKEN", ""),
+    "ttl": _get_env_int("UPSTASH_CACHE_TTL", 604800) or 604800,  # 7 days
+    "similarity_threshold": _get_env_float(
+        "CACHE_SIMILARITY_THRESHOLD", similarity_threshold
+    )
+    or similarity_threshold,
+}
+
 # ===== Neo4j Connection Configuration =====
 
 NEO4J_URI = os.getenv("NEO4J_URI", "")

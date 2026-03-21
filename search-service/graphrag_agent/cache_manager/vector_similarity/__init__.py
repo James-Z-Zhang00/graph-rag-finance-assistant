@@ -1,4 +1,5 @@
 from .matcher import VectorSimilarityMatcher
+from .upstash_vector_matcher import UpstashVectorMatcher
 from .embeddings import (
     EmbeddingProvider,
     SentenceTransformerEmbedding,
@@ -8,6 +9,7 @@ from .embeddings import (
 
 __all__ = [
     'VectorSimilarityMatcher',
+    'UpstashVectorMatcher',
     'EmbeddingProvider',
     'SentenceTransformerEmbedding',
     'OpenAIEmbeddingProvider',
