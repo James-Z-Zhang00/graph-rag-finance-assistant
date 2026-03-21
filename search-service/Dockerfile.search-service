@@ -10,9 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY search-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download sentence-transformer model at build time so Cloud Run doesn't
-# hit HuggingFace at runtime (avoids cold-start failures and rate limits)
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+# Download sentence-transformer model at build time into the same path
+# that MODEL_CACHE_DIR resolves to at runtime (/app/cache/model)
+# This prevents Cloud Run from hitting HuggingFace at runtime
+RUN mkdir -p /app/cache/model && \
+    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='/app/cache/model')"
 
 COPY search-service/ .
 
