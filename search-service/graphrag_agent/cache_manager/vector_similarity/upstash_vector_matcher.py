@@ -44,14 +44,19 @@ class UpstashVectorMatcher:
         """Namespace the cache key to avoid collisions between session and global indexes."""
         return f"{self.namespace}:{cache_key}"
 
+    def _to_flat_list(self, embedding) -> list:
+        """Flatten a (1, N) or (N,) numpy array to a plain Python list."""
+        if hasattr(embedding, 'ndim') and embedding.ndim > 1:
+            embedding = embedding[0]
+        if hasattr(embedding, 'tolist'):
+            return embedding.tolist()
+        return list(embedding)
+
     def add_vector(self, cache_key: str, query: str, context_info: Dict[str, Any] = None) -> None:
         """Encode query and upsert its vector into Upstash Vector."""
         with self._lock:
             embedding = self.embedding_provider.encode(query)
-            if hasattr(embedding, 'tolist'):
-                vector = embedding.tolist()
-            else:
-                vector = list(embedding)
+            vector = self._to_flat_list(embedding)
 
             metadata = {
                 "query": query,
@@ -72,10 +77,7 @@ class UpstashVectorMatcher:
         """
         with self._lock:
             embedding = self.embedding_provider.encode(query)
-            if hasattr(embedding, 'tolist'):
-                vector = embedding.tolist()
-            else:
-                vector = list(embedding)
+            vector = self._to_flat_list(embedding)
 
             query_thread_id = (context_info or {}).get("thread_id", "default")
 

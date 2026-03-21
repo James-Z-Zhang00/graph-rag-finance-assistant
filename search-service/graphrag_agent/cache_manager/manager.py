@@ -162,6 +162,9 @@ class CacheManager:
                     content = cache_item.get_content()
                     self.performance_metrics["get_time"] = time.time() - start_time
                     return content
+                else:
+                    # Redis key expired (TTL) but vector still exists — remove stale vector
+                    self.vector_matcher.remove_vector(similar_key)
 
         # Cache miss
         self.performance_metrics['misses'] += 1
@@ -204,6 +207,9 @@ class CacheManager:
                         content = cache_item.get_content()
                         self.performance_metrics["fast_get_time"] = time.time() - start_time
                         return content
+                else:
+                    # Redis key expired (TTL) but vector still exists — remove stale vector
+                    self.vector_matcher.remove_vector(similar_key)
 
         self.performance_metrics["fast_get_time"] = time.time() - start_time
         return None
