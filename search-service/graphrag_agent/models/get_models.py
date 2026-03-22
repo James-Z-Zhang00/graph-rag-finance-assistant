@@ -5,7 +5,6 @@ from langchain.callbacks.manager import AsyncCallbackManager
 
 
 import os
-import httpx
 
 from graphrag_agent.config.settings import (
     TIKTOKEN_CACHE_DIR,
@@ -14,34 +13,21 @@ from graphrag_agent.config.settings import (
 )
 
 
-def _get_cloud_run_http_client() -> httpx.Client | None:
-    """Return an httpx client that injects a Google OIDC token when running on Cloud Run.
-
-    When K_SERVICE is set (Cloud Run environment), the llm-gateway requires a
-    Google-signed ID token for service-to-service authentication. The standard
-    OpenAI SDK only sends the API key — this client adds the OIDC token on top.
-    Returns None when running locally (no injection needed).
-    """
+def _llm_gateway_auth_headers() -> dict:
+    """Return a Bearer identity token header when running on Cloud Run, empty dict locally."""
     if not os.getenv("K_SERVICE"):
-        return None
-
-    audience = os.getenv("OPENAI_BASE_URL", "").replace("/v1", "").rstrip("/")
-    if not audience:
-        return None
-
+        return {}
     try:
         from google.auth.transport.requests import Request
         from google.oauth2 import id_token
-
-        class _OIDCAuth(httpx.Auth):
-            def auth_flow(self, request):
-                token = id_token.fetch_id_token(Request(), audience)
-                request.headers["X-Serverless-Authorization"] = f"Bearer {token}"
-                yield request
-
-        return httpx.Client(auth=_OIDCAuth())
+        # Audience is the llm-gateway base URL (strip /v1 suffix)
+        audience = os.getenv("OPENAI_BASE_URL", "").rstrip("/")
+        if audience.endswith("/v1"):
+            audience = audience[:-3]
+        token = id_token.fetch_id_token(Request(), audience)
+        return {"Authorization": f"Bearer {token}"}
     except Exception:
-        return None
+        return {}
 
 
 # Set tiktoken cache directory to avoid downloading it on every run
@@ -54,17 +40,13 @@ setup_cache()
 
 def get_embeddings_model():
     config = {k: v for k, v in OPENAI_EMBEDDING_CONFIG.items() if v}
-    http_client = _get_cloud_run_http_client()
-    if http_client:
-        config["http_client"] = http_client
+    config["default_headers"] = _llm_gateway_auth_headers()
     return OpenAIEmbeddings(**config)
 
 
 def get_llm_model():
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
-    http_client = _get_cloud_run_http_client()
-    if http_client:
-        config["http_client"] = http_client
+    config["default_headers"] = _llm_gateway_auth_headers()
     return ChatOpenAI(**config)
 
 def get_stream_llm_model():
@@ -72,10 +54,7 @@ def get_stream_llm_model():
     manager = AsyncCallbackManager(handlers=[callback_handler])
 
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
-    config.update({"streaming": True, "callbacks": manager})
-    http_client = _get_cloud_run_http_client()
-    if http_client:
-        config["http_client"] = http_client
+    config.update({"streaming": True, "callbacks": manager, "default_headers": _llm_gateway_auth_headers()})
     return ChatOpenAI(**config)
 
 def count_tokens(text):
