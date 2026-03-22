@@ -29,3 +29,6 @@ tiktoken
 # Cloud cache (Upstash) — optional, required when CACHE_BACKEND=upstash
 upstash-redis>=1.1.0
 upstash-vector>=0.5.0
+
+# Google Cloud Run service-to-service authentication
+google-auth>=2.0.0
