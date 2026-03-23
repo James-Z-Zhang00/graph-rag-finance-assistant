@@ -56,30 +56,13 @@ build-service/**/*.pkl
 build-service/files/
 build-service/**/file_registry.json
 
-# ── Python generic ────────────────────────────────────────────────────────────
-__pycache__/
-*.py[codz]
-*$py.class
-*.so
-*.egg-info/
-*.egg
-
 # ── Environments ──────────────────────────────────────────────────────────────
 .env
-.envrc
 .venv
 env/
 venv/
-ENV/
 
-# ── Testing ───────────────────────────────────────────────────────────────────
-.pytest_cache/
-.coverage
-htmlcov/
-
-# ── Tools ─────────────────────────────────────────────────────────────────────
-.mypy_cache/
-.ruff_cache/
+# ── Misc ──────────────────────────────────────────────────────────────────────
 .DS_Store
 .claude/
 
