@@ -1,12 +1,10 @@
 # graph-rag-finance-assistant
 
-GraphRAG assistant for SEC filings + market data Q&amp;A with cited evidence
+#### Overview
 
-### Phase 4 Checklist
-- [x] Search and design a distributed microservice system with professional system design diagram and industrial standard endorsed. 
-- [x] Break the current project file structure from monolith to distributed locally.
-- [x] Push the project to GitHub then start from SEC microservice deployment, make the service endpoint live and build CI/CD automation pipeline. 
-- [x] Repeat the process for other parts, search agent, LLM etc. handle the database, Redis and cache management. 
-- [x] Check industrial standard metrics, e.g. latency, make sure they are all working well
+Phase 4 delivered distributed microservices. Phase 5 adds an enterprise compliance layer:
 
-![](./images/phase4.png)
+- **Full citation provenance** — surface existing `RetrievalResult` citations through to API responses
+- **Automated audit trails** — structured JSONL event logging per query lifecycle
+- **PII masking** — regex-based detection and masking before caching/logging
+- **Hallucination reduction** — LangGraph validation node scores faithfulness and regenerates low-quality answers
