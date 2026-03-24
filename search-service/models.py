@@ -12,3 +12,6 @@ class SearchRequest(BaseModel):
 class SearchResponse(BaseModel):
     answer: str
     execution_log: Optional[List[Dict[str, Any]]] = None
+    citations: Optional[List[str]] = None
+    quality_score: Optional[float] = None
+    audit_id: Optional[str] = None

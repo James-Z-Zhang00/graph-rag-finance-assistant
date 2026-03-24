@@ -65,6 +65,9 @@ async def chat(request: ChatRequest):
         answer=answer,
         execution_log=execution_log,
         kg_data=kg_data,
+        citations=data.get("citations"),
+        quality_score=data.get("quality_score"),
+        audit_id=data.get("audit_id"),
     )
 
 

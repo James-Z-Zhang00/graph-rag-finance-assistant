@@ -46,6 +46,9 @@ class HybridSearchTool(BaseSearchTool):
         # Call parent constructor
         super().__init__(cache_dir="./cache/hybrid_search")
 
+        # Stores the last batch of RetrievalResult objects for citation provenance
+        self._last_results: List[RetrievalResult] = []
+
         # Set up processing chains
         self._setup_chains()
 
@@ -823,6 +826,9 @@ class HybridSearchTool(BaseSearchTool):
 
             all_evidence = merge_retrieval_results(low_evidence, high_evidence, numeric_evidence, sections_evidence)
 
+            # Store for citation provenance (accessible via get_last_results())
+            self._last_results = all_evidence
+
             # Build real citation from actual retrieved IDs — override whatever the LLM wrote
             def _fmt(ids: list, quote: bool = False) -> str:
                 if not ids:
@@ -886,6 +892,10 @@ class HybridSearchTool(BaseSearchTool):
                 "retrieval_results": [],
                 "error": error_msg,
             }
+
+    def get_last_results(self) -> List[RetrievalResult]:
+        """Return the RetrievalResult objects from the most recent search call."""
+        return self._last_results
 
     def search(self, query_input: Any) -> str:
         """

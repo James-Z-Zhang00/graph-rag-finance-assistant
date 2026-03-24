@@ -20,19 +20,18 @@ router = APIRouter()
 async def search_hybrid(request: SearchRequest):
     agent = agent_pool.get(request.session_id)
     try:
-        if request.debug:
-            result = await asyncio.to_thread(
-                agent.ask_with_trace, request.query, thread_id=request.session_id
-            )
-            return SearchResponse(
-                answer=result["answer"],
-                execution_log=result.get("execution_log"),
-            )
-        else:
-            answer = await asyncio.to_thread(
-                agent.ask, request.query, thread_id=request.session_id
-            )
-            return SearchResponse(answer=answer)
+        # Always use ask_with_trace so PII masking and audit logging run on every request.
+        # execution_log is only included in the response when debug=True.
+        result = await asyncio.to_thread(
+            agent.ask_with_trace, request.query, thread_id=request.session_id
+        )
+        return SearchResponse(
+            answer=result["answer"],
+            execution_log=result.get("execution_log") if request.debug else None,
+            citations=result.get("citations"),
+            quality_score=result.get("quality_score"),
+            audit_id=result.get("audit_id"),
+        )
     except Exception as exc:
         logger.error("hybrid search error session=%s: %s", request.session_id, exc)
         raise HTTPException(status_code=500, detail=str(exc))

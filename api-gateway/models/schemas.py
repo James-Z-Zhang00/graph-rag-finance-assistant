@@ -18,6 +18,9 @@ class ChatResponse(BaseModel):
     kg_data: Optional[Dict] = None
     reference: Optional[Dict] = None
     iterations: Optional[List[Dict]] = None
+    citations: Optional[List[str]] = None
+    quality_score: Optional[float] = None
+    audit_id: Optional[str] = None
 
 
 class SourceRequest(BaseModel):

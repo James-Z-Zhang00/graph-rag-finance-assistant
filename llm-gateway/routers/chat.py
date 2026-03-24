@@ -50,10 +50,13 @@ async def chat_completions(
             return StreamingResponse(_stream(), media_type="text/event-stream")
 
         result = await provider.chat(request_body)
+        usage = result.get("usage", {}) if isinstance(result, dict) else {}
         logger.info(
-            "chat done model=%s elapsed=%.2fs",
+            "chat done model=%s elapsed=%.2fs prompt_tokens=%s completion_tokens=%s",
             body.model,
             time.time() - start,
+            usage.get("prompt_tokens", "?"),
+            usage.get("completion_tokens", "?"),
         )
         return JSONResponse(content=result)
 
