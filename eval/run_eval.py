@@ -4,26 +4,27 @@ Eval runner — two experiments:
   Experiment A (graphrag_vs_naive):
     Compares GraphRAG hybrid retrieval vs dense-only (naive) retrieval.
     Proves the "60% QA correctness improvement" resume claim.
+    Metrics: Faithfulness, ResponseRelevancy, FactualCorrectness*, LLMContextRecall*
+    (* only when ground_truth is available in the dataset)
 
   Experiment B (model_comparison):
-    Compares gpt-4o vs gpt-4.1-nano on the same GraphRAG-retrieved context.
+    Compares gpt-4o vs gpt-4.1-nano on identical GraphRAG-retrieved context.
     Proves "quality maintained after model swap" claim.
+    Metrics: Faithfulness, ResponseRelevancy, FactualCorrectness*
 
 Usage:
   python run_eval.py --experiment graphrag_vs_naive
   python run_eval.py --experiment model_comparison
   python run_eval.py --experiment all
-  python run_eval.py --experiment graphrag_vs_naive --dataset qa_dataset.json --output results/
+  python run_eval.py --experiment all --dataset qa_dataset.json --output results/
 
 Requires .env with:
   OPENAI_API_KEY, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD,
-  SEARCH_SERVICE_URL, SEARCH_SERVICE_TOKEN (optional if not authenticated)
+  SEARCH_SERVICE_URL, SEARCH_SERVICE_TOKEN (optional for unauthenticated services)
 """
 
 import argparse
 import json
-import os
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -38,19 +39,17 @@ from config import GRAPHRAG_MODEL, COMPARE_MODEL
 
 def load_dataset(path: str) -> list:
     with open(path) as f:
-        data = json.load(f)
-    return data
+        return json.load(f)
 
 
-def run_graphrag_vs_naive(dataset: list, output_dir: Path) -> pd.DataFrame:
+# ── Experiment A ─────────────────────────────────────────────────────────────
+
+def collect_graphrag_vs_naive(dataset: list) -> tuple[list, list]:
     """
-    For each question:
-      - Get GraphRAG answer + contexts
-      - Get naive answer + contexts
-      - Score both with answer_relevancy and faithfulness
-      - Score answer_correctness if ground_truth is available
+    Run all queries through GraphRAG and naive runners.
+    Returns (graphrag_samples, naive_samples) — lists ready for RAGAS scoring.
     """
-    rows = []
+    graphrag_samples, naive_samples = [], []
     total = len(dataset)
 
     for i, item in enumerate(dataset, 1):
@@ -58,87 +57,83 @@ def run_graphrag_vs_naive(dataset: list, output_dir: Path) -> pd.DataFrame:
         question = item["question"]
         ground_truth = item.get("ground_truth")
 
-        print(f"[{i}/{total}] {qid}: {question[:60]}...")
+        print(f"  [{i}/{total}] {qid}: {question[:65]}...")
 
         # GraphRAG
         try:
-            gr_result = graphrag_runner.query(question, session_id=f"eval_{qid}")
-            gr_answer = gr_result["answer"]
-            gr_contexts = gr_result["contexts"]
-            gr_internal_faithfulness = gr_result.get("quality_score")
+            gr = graphrag_runner.query(question, session_id=f"eval_{qid}")
+            graphrag_samples.append({
+                "id": qid,
+                "category": item.get("category", ""),
+                "question": question,
+                "answer": gr["answer"],
+                "contexts": gr["contexts"],
+                "ground_truth": ground_truth,
+                "internal_faithfulness": gr.get("quality_score"),
+            })
         except Exception as e:
-            print(f"  GraphRAG ERROR: {e}")
-            gr_answer, gr_contexts, gr_internal_faithfulness = f"[ERROR: {e}]", [], None
+            print(f"    GraphRAG ERROR: {e}")
 
         # Naive
         try:
-            nv_result = naive_runner.query(question)
-            nv_answer = nv_result["answer"]
-            nv_contexts = nv_result["contexts"]
+            nv = naive_runner.query(question)
+            naive_samples.append({
+                "id": qid,
+                "category": item.get("category", ""),
+                "question": question,
+                "answer": nv["answer"],
+                "contexts": nv["contexts"],
+                "ground_truth": ground_truth,
+            })
         except Exception as e:
-            print(f"  Naive ERROR: {e}")
-            nv_answer, nv_contexts = f"[ERROR: {e}]", []
-
-        # Score GraphRAG
-        gr_relevancy = judge.answer_relevancy(question, gr_answer)
-        gr_faithfulness = judge.faithfulness(gr_answer, gr_contexts)
-        gr_correctness = judge.answer_correctness(question, gr_answer, ground_truth)
-
-        # Score Naive
-        nv_relevancy = judge.answer_relevancy(question, nv_answer)
-        nv_faithfulness = judge.faithfulness(nv_answer, nv_contexts)
-        nv_correctness = judge.answer_correctness(question, nv_answer, ground_truth)
-
-        row = {
-            "id": qid,
-            "category": item.get("category", ""),
-            "question": question[:80],
-            "gr_relevancy": gr_relevancy.get("score"),
-            "gr_faithfulness": gr_faithfulness.get("score") or gr_internal_faithfulness,
-            "gr_correctness": gr_correctness.get("score"),
-            "nv_relevancy": nv_relevancy.get("score"),
-            "nv_faithfulness": nv_faithfulness.get("score"),
-            "nv_correctness": nv_correctness.get("score"),
-        }
-        rows.append(row)
-
-        # Save incremental progress
-        _save_result(output_dir / f"graphrag_vs_naive_{qid}.json", {
-            "question": question,
-            "ground_truth": ground_truth,
-            "graphrag": {
-                "answer": gr_answer,
-                "contexts": gr_contexts,
-                "scores": {
-                    "relevancy": gr_relevancy,
-                    "faithfulness": gr_faithfulness,
-                    "correctness": gr_correctness,
-                    "internal_faithfulness": gr_internal_faithfulness,
-                },
-            },
-            "naive": {
-                "answer": nv_answer,
-                "contexts": nv_contexts,
-                "scores": {
-                    "relevancy": nv_relevancy,
-                    "faithfulness": nv_faithfulness,
-                    "correctness": nv_correctness,
-                },
-            },
-        })
+            print(f"    Naive ERROR: {e}")
 
     naive_runner.close()
-    return pd.DataFrame(rows)
+    return graphrag_samples, naive_samples
 
 
-def run_model_comparison(dataset: list, output_dir: Path) -> pd.DataFrame:
+def run_graphrag_vs_naive(dataset: list, output_dir: Path) -> pd.DataFrame:
+    print("Collecting answers from GraphRAG and naive runners...")
+    graphrag_samples, naive_samples = collect_graphrag_vs_naive(dataset)
+
+    print(f"\nScoring {len(graphrag_samples)} GraphRAG samples with RAGAS...")
+    gr_scores = judge.score_batch(graphrag_samples)
+    gr_scores.insert(0, "system", "graphrag")
+
+    print(f"Scoring {len(naive_samples)} naive samples with RAGAS...")
+    nv_scores = judge.score_batch(naive_samples)
+    nv_scores.insert(0, "system", "naive")
+
+    # Attach internal faithfulness (from HallucinationValidator) to GraphRAG rows
+    internal_scores = {s["id"]: s.get("internal_faithfulness") for s in graphrag_samples}
+    if "user_input" in gr_scores.columns:
+        # RAGAS attaches user_input; map back via position since order is preserved
+        gr_scores["internal_faithfulness"] = [
+            graphrag_samples[i].get("internal_faithfulness")
+            for i in range(len(gr_scores))
+        ]
+
+    combined = pd.concat([gr_scores, nv_scores], ignore_index=True)
+
+    _save_result(output_dir / "graphrag_vs_naive_full.json", {
+        "graphrag_samples": graphrag_samples,
+        "naive_samples": naive_samples,
+        "graphrag_scores": gr_scores.to_dict(orient="records"),
+        "naive_scores": nv_scores.to_dict(orient="records"),
+    })
+
+    return combined
+
+
+# ── Experiment B ─────────────────────────────────────────────────────────────
+
+def collect_model_comparison(dataset: list) -> tuple[list, list]:
     """
-    For each question:
-      - Get GraphRAG contexts (retrieval step only, model-agnostic)
-      - Generate answers with GRAPHRAG_MODEL (gpt-4.1-nano) and COMPARE_MODEL (gpt-4o)
-      - Score both answers with answer_relevancy and answer_correctness
+    For each question, retrieve context via GraphRAG then generate answers
+    with both GRAPHRAG_MODEL and COMPARE_MODEL using identical context.
+    Returns (prod_samples, compare_samples).
     """
-    rows = []
+    prod_samples, compare_samples = [], []
     total = len(dataset)
 
     for i, item in enumerate(dataset, 1):
@@ -146,59 +141,58 @@ def run_model_comparison(dataset: list, output_dir: Path) -> pd.DataFrame:
         question = item["question"]
         ground_truth = item.get("ground_truth")
 
-        print(f"[{i}/{total}] {qid}: {question[:60]}...")
+        print(f"  [{i}/{total}] {qid}: {question[:65]}...")
 
-        # Get GraphRAG contexts (retrieved by the deployed service, which uses gpt-4.1-nano)
+        # Retrieve context via GraphRAG (model-agnostic retrieval step)
         try:
-            gr_result = graphrag_runner.query(question, session_id=f"eval_mc_{qid}")
-            contexts = gr_result["contexts"]
+            gr = graphrag_runner.query(question, session_id=f"mc_{qid}")
+            contexts = gr["contexts"]
+            prod_answer = gr["answer"]  # already generated by GRAPHRAG_MODEL
         except Exception as e:
-            print(f"  GraphRAG context fetch ERROR: {e}")
-            contexts = []
+            print(f"    GraphRAG ERROR: {e}")
+            contexts, prod_answer = [], f"[ERROR: {e}]"
 
-        # Generate with production model (gpt-4.1-nano via deployed service)
-        prod_answer = gr_result.get("answer", "") if "gr_result" in dir() else ""
-
-        # Generate with comparison model (gpt-4o) on the same contexts
+        # Generate with comparison model on the same contexts
         try:
             compare_answer = judge.model_comparison_answer(question, contexts, COMPARE_MODEL)
         except Exception as e:
-            print(f"  Compare model ERROR: {e}")
+            print(f"    {COMPARE_MODEL} ERROR: {e}")
             compare_answer = f"[ERROR: {e}]"
 
-        # Score both
-        prod_relevancy = judge.answer_relevancy(question, prod_answer)
-        prod_correctness = judge.answer_correctness(question, prod_answer, ground_truth)
-        compare_relevancy = judge.answer_relevancy(question, compare_answer)
-        compare_correctness = judge.answer_correctness(question, compare_answer, ground_truth)
+        base = {"id": qid, "category": item.get("category", ""), "question": question,
+                "contexts": contexts, "ground_truth": ground_truth}
 
-        row = {
-            "id": qid,
-            "category": item.get("category", ""),
-            "question": question[:80],
-            f"{GRAPHRAG_MODEL}_relevancy": prod_relevancy.get("score"),
-            f"{GRAPHRAG_MODEL}_correctness": prod_correctness.get("score"),
-            f"{COMPARE_MODEL}_relevancy": compare_relevancy.get("score"),
-            f"{COMPARE_MODEL}_correctness": compare_correctness.get("score"),
-        }
-        rows.append(row)
+        prod_samples.append({**base, "answer": prod_answer})
+        compare_samples.append({**base, "answer": compare_answer})
 
-        _save_result(output_dir / f"model_comparison_{qid}.json", {
-            "question": question,
-            "ground_truth": ground_truth,
-            "contexts_from_graphrag": contexts,
-            GRAPHRAG_MODEL: {
-                "answer": prod_answer,
-                "scores": {"relevancy": prod_relevancy, "correctness": prod_correctness},
-            },
-            COMPARE_MODEL: {
-                "answer": compare_answer,
-                "scores": {"relevancy": compare_relevancy, "correctness": compare_correctness},
-            },
-        })
+    return prod_samples, compare_samples
 
-    return pd.DataFrame(rows)
 
+def run_model_comparison(dataset: list, output_dir: Path) -> pd.DataFrame:
+    print(f"Collecting answers: {GRAPHRAG_MODEL} vs {COMPARE_MODEL}...")
+    prod_samples, compare_samples = collect_model_comparison(dataset)
+
+    print(f"\nScoring {GRAPHRAG_MODEL} samples with RAGAS...")
+    prod_scores = judge.score_batch(prod_samples)
+    prod_scores.insert(0, "model", GRAPHRAG_MODEL)
+
+    print(f"Scoring {COMPARE_MODEL} samples with RAGAS...")
+    compare_scores = judge.score_batch(compare_samples)
+    compare_scores.insert(0, "model", COMPARE_MODEL)
+
+    combined = pd.concat([prod_scores, compare_scores], ignore_index=True)
+
+    _save_result(output_dir / "model_comparison_full.json", {
+        "prod_samples": prod_samples,
+        "compare_samples": compare_samples,
+        "prod_scores": prod_scores.to_dict(orient="records"),
+        "compare_scores": compare_scores.to_dict(orient="records"),
+    })
+
+    return combined
+
+
+# ── Output helpers ────────────────────────────────────────────────────────────
 
 def _save_result(path: Path, data: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,33 +205,30 @@ def print_summary(df: pd.DataFrame, experiment: str):
     print(f"RESULTS: {experiment}")
     print(f"{'='*70}")
 
-    numeric_cols = df.select_dtypes(include="float").columns
-    means = df[numeric_cols].mean().round(3)
-    print("\nMean scores across all questions:")
-    print(tabulate(means.reset_index(), headers=["metric", "mean"], tablefmt="simple"))
+    metric_cols = [c for c in df.columns if c not in
+                   ("system", "model", "user_input", "response", "retrieved_contexts",
+                    "reference", "id", "category", "internal_faithfulness")]
 
-    if experiment == "graphrag_vs_naive":
-        gr_cols = [c for c in numeric_cols if c.startswith("gr_")]
-        nv_cols = [c for c in numeric_cols if c.startswith("nv_")]
-        metric_names = [c.replace("gr_", "") for c in gr_cols]
+    group_col = "system" if experiment == "graphrag_vs_naive" else "model"
+    if group_col not in df.columns:
+        return
 
-        comparison = []
-        for gr_col, nv_col, metric in zip(gr_cols, nv_cols, metric_names):
-            gr_mean = df[gr_col].dropna().mean()
-            nv_mean = df[nv_col].dropna().mean()
-            if nv_mean and nv_mean > 0:
-                delta_pct = ((gr_mean - nv_mean) / nv_mean) * 100
+    summary = df.groupby(group_col)[metric_cols].mean().round(3)
+    print(tabulate(summary, headers="keys", tablefmt="simple"))
+
+    if experiment == "graphrag_vs_naive" and set(["graphrag", "naive"]).issubset(df[group_col].values):
+        print("\nDelta (GraphRAG - Naive) / Naive  [improvement %]:")
+        gr_row = summary.loc["graphrag"]
+        nv_row = summary.loc["naive"]
+        deltas = []
+        for col in metric_cols:
+            gr_val, nv_val = gr_row.get(col), nv_row.get(col)
+            if gr_val is not None and nv_val and nv_val > 0:
+                pct = round(((gr_val - nv_val) / nv_val) * 100, 1)
             else:
-                delta_pct = float("nan")
-            comparison.append({
-                "metric": metric,
-                "graphrag": round(gr_mean, 3),
-                "naive": round(nv_mean, 3),
-                "delta_%": round(delta_pct, 1),
-            })
-
-        print("\nGraphRAG vs Naive comparison:")
-        print(tabulate(comparison, headers="keys", tablefmt="simple"))
+                pct = float("nan")
+            deltas.append({"metric": col, "graphrag": gr_val, "naive": nv_val, "delta_%": pct})
+        print(tabulate(deltas, headers="keys", tablefmt="simple"))
 
     print(f"\nFull results saved to results/ directory.")
 
@@ -249,41 +240,34 @@ def save_summary(df: pd.DataFrame, experiment: str, output_dir: Path):
     print(f"Summary CSV: {csv_path}")
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
+
 def main():
-    parser = argparse.ArgumentParser(description="Run GraphRAG evaluation experiments")
+    parser = argparse.ArgumentParser(description="Run GraphRAG RAGAS evaluation experiments")
     parser.add_argument(
         "--experiment",
         choices=["graphrag_vs_naive", "model_comparison", "all"],
         default="all",
-        help="Which experiment to run",
     )
-    parser.add_argument(
-        "--dataset",
-        default="qa_dataset.json",
-        help="Path to Q&A dataset JSON (default: qa_dataset.json)",
-    )
-    parser.add_argument(
-        "--output",
-        default="results",
-        help="Output directory for results (default: results/)",
-    )
+    parser.add_argument("--dataset", default="datasets/qa_dataset.json")
+    parser.add_argument("--output", default="results")
     args = parser.parse_args()
 
     dataset = load_dataset(args.dataset)
     output_dir = Path(args.output)
     output_dir.mkdir(exist_ok=True)
 
-    ground_truth_count = sum(1 for q in dataset if q.get("ground_truth"))
-    if ground_truth_count == 0:
+    has_ground_truth = sum(1 for q in dataset if q.get("ground_truth"))
+    if has_ground_truth == 0:
         print(
-            "\nWARNING: No ground_truth values found in dataset.\n"
-            "answer_correctness scores will be None.\n"
-            "To add ground truth: edit qa_dataset.json and fill in 'ground_truth' fields,\n"
-            "or run: python generate_ground_truth.py\n"
+            "\nWARNING: No ground_truth in dataset — FactualCorrectness and LLMContextRecall "
+            "will be skipped.\nRun: python generate_ground_truth.py  to populate ground truth first.\n"
         )
+    else:
+        print(f"\nGround truth available for {has_ground_truth}/{len(dataset)} questions.\n")
 
     if args.experiment in ("graphrag_vs_naive", "all"):
-        print("\n--- Experiment A: GraphRAG vs Naive ---")
+        print("--- Experiment A: GraphRAG vs Naive ---")
         df_a = run_graphrag_vs_naive(dataset, output_dir)
         print_summary(df_a, "graphrag_vs_naive")
         save_summary(df_a, "graphrag_vs_naive", output_dir)

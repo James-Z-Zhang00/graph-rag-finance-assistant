@@ -19,8 +19,8 @@ import judge
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", default="qa_dataset.json")
-    parser.add_argument("--output", default="qa_dataset.json")
+    parser.add_argument("--dataset", default="datasets/qa_dataset.json")
+    parser.add_argument("--output", default="datasets/qa_dataset.json")
     args = parser.parse_args()
 
     with open(args.dataset) as f:
