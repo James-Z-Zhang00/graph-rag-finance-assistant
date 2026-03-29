@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - "search-service/**"
+      - "!search-service/**/README.md"
+      - "!search-service/**/readme.md"
       - ".github/workflows/deploy-search-service.yml"
 
 env:

@@ -70,4 +70,7 @@ venv/
 project-plans/
 
 # ── Eval (local only, never deployed) ─────────────────────────────────────────
+eval/.env
 eval/results/
+eval/**/__pycache__/
+eval/**/*.pyc

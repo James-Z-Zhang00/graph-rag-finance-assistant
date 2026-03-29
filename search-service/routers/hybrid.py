@@ -31,6 +31,7 @@ async def search_hybrid(request: SearchRequest):
             citations=result.get("citations"),
             quality_score=result.get("quality_score"),
             audit_id=result.get("audit_id"),
+            contexts=result.get("contexts"),
         )
     except Exception as exc:
         logger.error("hybrid search error session=%s: %s", request.session_id, exc)

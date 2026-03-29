@@ -57,6 +57,7 @@ class HybridAgent(BaseAgent):
         self._last_citations: List[str] = []
         self._last_quality_score: Optional[float] = None
         self._last_audit_id: Optional[str] = None
+        self._last_contexts: List[str] = []
 
     def _setup_tools(self) -> List:
         """Set up tools"""
@@ -124,6 +125,9 @@ class HybridAgent(BaseAgent):
 
         # --- Citation collection ---
         self._last_citations = self._build_citations()
+
+        # --- Context capture for evaluation ---
+        self._last_contexts = [docs] if docs and docs != "No relevant information found" else []
 
         # --- Audit: retrieval done ---
         last_results = self.search_tool.get_last_results()
@@ -268,6 +272,7 @@ class HybridAgent(BaseAgent):
         self._last_citations = []
         self._last_quality_score = None
         self._last_audit_id = None
+        self._last_contexts = []
 
         # Apply PII masking
         masked_query, pii_types = self._pii_masker.mask(query)
@@ -291,6 +296,7 @@ class HybridAgent(BaseAgent):
         result["citations"] = self._last_citations
         result["quality_score"] = self._last_quality_score
         result["audit_id"] = audit_id
+        result["contexts"] = self._last_contexts
 
         return result
 

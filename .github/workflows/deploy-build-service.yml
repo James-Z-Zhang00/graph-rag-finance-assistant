@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - "build-service/**"
+      - "!build-service/**/README.md"
+      - "!build-service/**/readme.md"
       - ".github/workflows/deploy-build-service.yml"
 
 env:

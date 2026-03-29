@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - "api-gateway/**"
+      - "!api-gateway/**/README.md"
+      - "!api-gateway/**/readme.md"
       - ".github/workflows/deploy-api-gateway.yml"
 
 env:

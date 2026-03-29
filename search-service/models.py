@@ -15,3 +15,4 @@ class SearchResponse(BaseModel):
     citations: Optional[List[str]] = None
     quality_score: Optional[float] = None
     audit_id: Optional[str] = None
+    contexts: Optional[List[str]] = None

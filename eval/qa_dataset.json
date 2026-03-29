@@ -1,0 +1,122 @@
+[
+  {
+    "id": "q01",
+    "question": "What were the total revenues for the company in the most recently reported fiscal year?",
+    "ground_truth": null,
+    "category": "financial_metrics"
+  },
+  {
+    "id": "q02",
+    "question": "How did net income change year-over-year in the most recent fiscal year reported?",
+    "ground_truth": null,
+    "category": "financial_metrics"
+  },
+  {
+    "id": "q03",
+    "question": "What is the company's gross profit margin and how has it trended over the past two fiscal years?",
+    "ground_truth": null,
+    "category": "financial_metrics"
+  },
+  {
+    "id": "q04",
+    "question": "What were the company's total operating expenses and what drove the largest increases?",
+    "ground_truth": null,
+    "category": "financial_metrics"
+  },
+  {
+    "id": "q05",
+    "question": "What are the primary risk factors the company identifies in its SEC filing?",
+    "ground_truth": null,
+    "category": "risk_factors"
+  },
+  {
+    "id": "q06",
+    "question": "How does the company describe its competitive risks and market position?",
+    "ground_truth": null,
+    "category": "risk_factors"
+  },
+  {
+    "id": "q07",
+    "question": "What regulatory or legal risks does the company highlight in its risk factors section?",
+    "ground_truth": null,
+    "category": "risk_factors"
+  },
+  {
+    "id": "q08",
+    "question": "What are the company's main business segments and their respective revenue contributions?",
+    "ground_truth": null,
+    "category": "business_segments"
+  },
+  {
+    "id": "q09",
+    "question": "Which business segment showed the highest revenue growth and what drove that growth?",
+    "ground_truth": null,
+    "category": "business_segments"
+  },
+  {
+    "id": "q10",
+    "question": "What are the company's primary geographic markets and how is revenue distributed across regions?",
+    "ground_truth": null,
+    "category": "business_segments"
+  },
+  {
+    "id": "q11",
+    "question": "How much did the company spend on research and development, and how does this compare to the prior year?",
+    "ground_truth": null,
+    "category": "operations"
+  },
+  {
+    "id": "q12",
+    "question": "What were the company's capital expenditures and what were they primarily used for?",
+    "ground_truth": null,
+    "category": "operations"
+  },
+  {
+    "id": "q13",
+    "question": "How many employees does the company have and did headcount increase or decrease year-over-year?",
+    "ground_truth": null,
+    "category": "operations"
+  },
+  {
+    "id": "q14",
+    "question": "What acquisitions or divestitures did the company complete or announce during the fiscal year?",
+    "ground_truth": null,
+    "category": "operations"
+  },
+  {
+    "id": "q15",
+    "question": "What is the company's total long-term debt and what are the key maturity dates?",
+    "ground_truth": null,
+    "category": "balance_sheet"
+  },
+  {
+    "id": "q16",
+    "question": "How does the company describe its liquidity position and cash flow from operations?",
+    "ground_truth": null,
+    "category": "balance_sheet"
+  },
+  {
+    "id": "q17",
+    "question": "What stock repurchase programs has the company authorized and how much has been repurchased?",
+    "ground_truth": null,
+    "category": "balance_sheet"
+  },
+  {
+    "id": "q18",
+    "question": "What are the key strategic priorities and growth initiatives described by management?",
+    "ground_truth": null,
+    "category": "strategy"
+  },
+  {
+    "id": "q19",
+    "question": "How does the company describe its approach to artificial intelligence or technology investment?",
+    "ground_truth": null,
+    "category": "strategy"
+  },
+  {
+    "id": "q20",
+    "question": "What material legal proceedings or government investigations is the company involved in?",
+    "ground_truth": null,
+    "category": "legal"
+  }
+]
