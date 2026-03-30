@@ -74,3 +74,6 @@ eval/.env
 eval/results/
 eval/**/__pycache__/
 eval/**/*.pyc
+
+# ── Test files (PDFs too large for git — upload to GCS instead) ───────────────
+TEST-FILE/
