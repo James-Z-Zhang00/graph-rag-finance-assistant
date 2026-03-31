@@ -354,8 +354,6 @@ class BaseAgent(ABC):
         # 1. First try global cache (cross-session cache)
         global_result = self.global_cache_manager.get(query)
         if global_result:
-            print(f"Global cache hit: {query[:30]}...")
-
             cache_time = time.time() - cache_check_start
             self._log_performance("cache_check", {
                 "duration": cache_time,
@@ -367,8 +365,6 @@ class BaseAgent(ABC):
         # 2. Try fast path - high-quality cache skipping validation
         fast_result = self.check_fast_cache(query, thread_id)
         if fast_result:
-            print(f"Fast path cache hit: {query[:30]}...")
-
             # Sync hit content to global cache
             self.global_cache_manager.set(query, fast_result)
 
@@ -383,8 +379,6 @@ class BaseAgent(ABC):
         # 3. Try standard cache path with optimized validation
         cached_response = self.cache_manager.get(query, skip_validation=True, thread_id=thread_id)
         if cached_response:
-            print(f"Standard cache hit, skipping validation: {query[:30]}...")
-
             # Sync hit content to global cache
             self.global_cache_manager.set(query, cached_response)
 
@@ -424,11 +418,9 @@ class BaseAgent(ABC):
         global_cache_time = time.time() - global_cache_start
 
         if global_result:
-            print(f"Global cache hit: {safe_query[:30]}... ({global_cache_time:.4f}s)")
-
             return {
                 "answer": global_result,
-                "execution_log": [{"node": "global_cache_hit", "timestamp": time.time(), "input": safe_query, "output": "Global cache hit"}]
+                "execution_log": [{"node": "global_cache_hit", "timestamp": time.time(), "output": "Global cache hit"}]
             }
 
         # First try fast path - high-quality cache skipping validation
@@ -437,14 +429,12 @@ class BaseAgent(ABC):
         fast_cache_time = time.time() - fast_cache_start
 
         if fast_result:
-            print(f"Fast path cache hit: {safe_query[:30]}... ({fast_cache_time:.4f}s)")
-
             # Sync hit content to global cache
             self.global_cache_manager.set(safe_query, fast_result)
 
             return {
                 "answer": fast_result,
-                "execution_log": [{"node": "fast_cache_hit", "timestamp": time.time(), "input": safe_query, "output": "High-quality cache hit"}]
+                "execution_log": [{"node": "fast_cache_hit", "timestamp": time.time(), "output": "High-quality cache hit"}]
             }
 
         # Try standard cache path
@@ -453,14 +443,12 @@ class BaseAgent(ABC):
         cache_time = time.time() - cache_start
 
         if cached_response:
-            print(f"Full Q&A cache hit: {safe_query[:30]}... ({cache_time:.4f}s)")
-
             # Sync hit content to global cache
             self.global_cache_manager.set(safe_query, cached_response)
 
             return {
                 "answer": cached_response,
-                "execution_log": [{"node": "cache_hit", "timestamp": time.time(), "input": safe_query, "output": "Standard cache hit"}]
+                "execution_log": [{"node": "cache_hit", "timestamp": time.time(), "output": "Standard cache hit"}]
             }
 
         # Cache miss, execute standard flow
@@ -477,10 +465,7 @@ class BaseAgent(ABC):
         try:
             # Execute full processing flow
             for output in self.graph.stream(inputs, config=config):
-                pprint.pprint(f"Output from node '{list(output.keys())[0]}':")
-                pprint.pprint("---")
-                pprint.pprint(output, indent=2, width=80, depth=None)
-                pprint.pprint("\n---\n")
+                pass
 
             chat_history = self.memory.get(config)["channel_values"]["messages"]
             answer = chat_history[-1].content
@@ -493,8 +478,6 @@ class BaseAgent(ABC):
                 self.global_cache_manager.set(safe_query, answer)
 
             process_time = time.time() - process_start
-            print(f"Full processing time: {process_time:.4f}s")
-
             overall_time = time.time() - overall_start
             self._log_performance("ask_with_trace", {
                 "total_duration": overall_time,
@@ -508,10 +491,9 @@ class BaseAgent(ABC):
             }
         except Exception as e:
             error_time = time.time() - process_start
-            print(f"Error processing query: {e} ({error_time:.4f}s)")
             return {
                 "answer": f"Sorry, an error occurred while processing your question. Please try again later or rephrase your question. Error details: {str(e)}",
-                "execution_log": self.execution_log + [{"node": "error", "timestamp": time.time(), "input": query, "output": str(e)}]
+                "execution_log": self.execution_log + [{"node": "error", "timestamp": time.time(), "output": str(e)}]
             }
 
     def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None):
@@ -568,8 +550,6 @@ class BaseAgent(ABC):
 
             return answer
         except Exception as e:
-            error_time = time.time() - process_start
-            print(f"Error processing query: {e} ({error_time:.4f}s)")
             return f"Sorry, an error occurred while processing your question. Please try again later or rephrase your question. Error details: {str(e)}"
 
     async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> AsyncGenerator[str, None]:
