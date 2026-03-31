@@ -44,7 +44,11 @@ async def search_hybrid_stream(request: SearchRequest):
 
     async def generate():
         try:
-            async for chunk in agent.ask_stream(request.query, thread_id=request.session_id):
+            # Use ask_stream_with_compliance so PII masking, audit logging,
+            # and DLP output scanning run on every streaming request.
+            async for chunk in agent.ask_stream_with_compliance(
+                request.query, thread_id=request.session_id
+            ):
                 yield chunk
         except Exception as exc:
             logger.error("hybrid stream error session=%s: %s", request.session_id, exc)

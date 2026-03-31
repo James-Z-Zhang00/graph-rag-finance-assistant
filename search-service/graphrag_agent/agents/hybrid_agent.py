@@ -14,7 +14,16 @@ from graphrag_agent.config.prompts import (
 from graphrag_agent.config.settings import response_type
 from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
 from graphrag_agent.agents.base import BaseAgent
-from graphrag_agent.compliance import PIIMasker, AuditLogger, HallucinationValidator
+from graphrag_agent.compliance import (
+    PIIMasker,
+    PresidioMasker,
+    DLPOutputScanner,
+    AuditLogger,
+    HallucinationValidator,
+    generate_request_id,
+    set_request_id,
+)
+from graphrag_agent.config.settings import COMPLIANCE_SETTINGS
 from langgraph.graph.message import add_messages
 
 # Grounding-enforced regeneration prompt — used when faithfulness score < threshold
@@ -49,9 +58,23 @@ class HybridAgent(BaseAgent):
         super().__init__(cache_dir=self.cache_dir)
 
         # --- Compliance components ---
-        self._pii_masker = PIIMasker()
+        if COMPLIANCE_SETTINGS["presidio_enabled"]:
+            self._pii_masker = PresidioMasker(
+                score_threshold=COMPLIANCE_SETTINGS["presidio_score_threshold"]
+            )
+        else:
+            self._pii_masker = PIIMasker()
+
         self.audit_logger = AuditLogger()
         self._validator = HallucinationValidator(llm=self.llm)
+
+        self._dlp_scanner: Optional[DLPOutputScanner] = None
+        if COMPLIANCE_SETTINGS["dlp_enabled"]:
+            self._dlp_scanner = DLPOutputScanner(
+                project_id=COMPLIANCE_SETTINGS["dlp_project_id"],
+                fail_open=COMPLIANCE_SETTINGS["dlp_fail_open"],
+                timeout_seconds=COMPLIANCE_SETTINGS["dlp_timeout_seconds"],
+            )
 
         # Per-request compliance state (safe: each agent instance is single-threaded)
         self._last_citations: List[str] = []
@@ -137,7 +160,7 @@ class HybridAgent(BaseAgent):
             "result_count": len(last_results),
             "local_count": local_count,
             "global_count": global_count,
-        })
+        }, pipeline_stage="retrieval")
 
         # First try global cache
         global_result = self.global_cache_manager.get(question)
@@ -177,7 +200,7 @@ class HybridAgent(BaseAgent):
             # --- Audit: generation done ---
             self.audit_logger.log("generation_done", thread_id, {
                 "answer_length": len(response) if response else 0,
-            })
+            }, pipeline_stage="generation")
 
             self._log_execution("generate",
                             {"question": question, "docs_length": len(docs)},
@@ -225,7 +248,7 @@ class HybridAgent(BaseAgent):
             "quality_score": score,
             "passed": passed,
             "unsupported_claims_count": len(validation.get("unsupported_claims", [])),
-        })
+        }, pipeline_stage="hallucination_validation")
         self._log_execution("validate", {"score": score, "passed": passed}, validation)
 
         if passed:
@@ -263,34 +286,52 @@ class HybridAgent(BaseAgent):
     def ask_with_trace(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> Dict:
         """
         Execute query with full compliance pipeline:
-        1. PII masking on the query
-        2. Audit trail: query_received
-        3. Base RAG pipeline (retrieve → generate → validate)
-        4. Return answer enriched with citations, quality_score, audit_id
+        1. Generate request_id and bind to thread-local context
+        2. PII masking on the query (Presidio or regex fallback)
+        3. Audit trail: pii_masked (if PII found), query_received
+        4. Base RAG pipeline (retrieve → generate → validate)
+        5. Cloud DLP scan of LLM output (LLM06 mitigation)
+        6. Return answer enriched with citations, quality_score, audit_id
         """
+        # Bind a new request_id to this thread — picked up automatically by
+        # AuditLogger.log() for every event in this request's lifecycle.
+        set_request_id(generate_request_id())
+
         # Reset per-request state
         self._last_citations = []
         self._last_quality_score = None
         self._last_audit_id = None
         self._last_contexts = []
 
-        # Apply PII masking
-        masked_query, pii_types = self._pii_masker.mask(query)
+        # --- Boundary 1: mask PII before anything touches the query ---
+        masked_query, mask_result = self._pii_masker.mask(query)
 
-        if pii_types:
+        if mask_result.detections:
             self.audit_logger.log("pii_masked", thread_id, {
-                "types_found": pii_types,
-                "count": len(pii_types),
-            })
+                "types_found": mask_result.types_found,
+                "count": len(mask_result.detections),
+                "recognizer_ids": mask_result.recognizer_ids,
+            }, pipeline_stage="input_masking")
 
         audit_id = self.audit_logger.log("query_received", thread_id, {
             "query_masked": masked_query,
             "session_id": thread_id,
-        })
+        }, pipeline_stage="input")
         self._last_audit_id = audit_id
 
-        # Run base RAG pipeline with masked query
+        # --- RAG pipeline (operates on masked query only) ---
         result = super().ask_with_trace(masked_query, thread_id, recursion_limit)
+
+        # --- Boundary 2: DLP scan of LLM output before returning to caller ---
+        if self._dlp_scanner and result.get("answer"):
+            from graphrag_agent.compliance.request_context import get_request_id
+            dlp_result = self._dlp_scanner.scan(
+                result["answer"],
+                session_id=thread_id,
+                request_id=get_request_id(),
+            )
+            if dlp_result.has_findings:
+                result["answer"] = dlp_result.redacted_text
 
         # Attach compliance fields to result
         result["citations"] = self._last_citations
@@ -299,6 +340,72 @@ class HybridAgent(BaseAgent):
         result["contexts"] = self._last_contexts
 
         return result
+
+    async def ask_stream_with_compliance(
+        self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None
+    ):
+        """
+        Streaming entry point with full compliance pipeline.
+
+        Fixes the streaming path gap: the base ask_stream() has no PII masking
+        or audit logging.  This method applies both before delegating to the
+        base streaming pipeline, then buffers the full response for DLP scanning
+        before yielding chunks to the caller.
+
+        Status tokens ("**Analyzing question**...") are yielded immediately so
+        the user sees progress without waiting for the DLP buffer phase.
+        """
+        set_request_id(generate_request_id())
+
+        # --- Boundary 1: mask input ---
+        masked_query, mask_result = self._pii_masker.mask(query)
+
+        if mask_result.detections:
+            self.audit_logger.log("pii_masked", thread_id, {
+                "types_found": mask_result.types_found,
+                "count": len(mask_result.detections),
+                "recognizer_ids": mask_result.recognizer_ids,
+            }, pipeline_stage="input_masking")
+
+        self.audit_logger.log("query_received", thread_id, {
+            "query_masked": masked_query,
+            "session_id": thread_id,
+        }, pipeline_stage="input")
+
+        # Collect chunks — yield status tokens immediately, buffer answer content
+        answer_buffer = []
+        async for chunk in super().ask_stream(masked_query, thread_id=thread_id, recursion_limit=recursion_limit):
+            # Status tokens start with "**" — yield immediately for responsiveness
+            if chunk.startswith("**"):
+                yield chunk
+            else:
+                answer_buffer.append(chunk)
+
+        full_answer = "".join(answer_buffer)
+
+        # --- Boundary 2: DLP scan of buffered answer ---
+        if self._dlp_scanner and full_answer:
+            from graphrag_agent.compliance.request_context import get_request_id
+            dlp_result = await self._dlp_scanner.async_scan(
+                full_answer,
+                session_id=thread_id,
+                request_id=get_request_id(),
+            )
+            if dlp_result.has_findings:
+                full_answer = dlp_result.redacted_text
+
+        # Yield the (possibly redacted) answer in sentence-sized chunks
+        if full_answer:
+            chunks = re.split(r'([.!?。！？]\s*)', full_answer)
+            buffer = ""
+            for i, piece in enumerate(chunks):
+                buffer += piece
+                if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(0.01)
+            if buffer:
+                yield buffer
 
     # ── Streaming support (unchanged) ───────────────────────────────────────
 

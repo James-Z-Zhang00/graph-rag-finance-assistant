@@ -373,3 +373,27 @@ MULTI_AGENT_WORKER_MAX_CONCURRENCY = (
 )
 if MULTI_AGENT_WORKER_MAX_CONCURRENCY < 1:
     raise ValueError("MA_WORKER_MAX_CONCURRENCY must be >= 1")
+
+# ===== Compliance Configuration =====
+
+COMPLIANCE_SETTINGS = {
+    # Presidio-based input masking — False falls back to regex-only PIIMasker
+    "presidio_enabled": _get_env_bool("PRESIDIO_ENABLED", True),
+    # Minimum Presidio recognizer confidence score to act on a detection
+    "presidio_score_threshold": _get_env_float("PRESIDIO_SCORE_THRESHOLD", 0.7) or 0.7,
+    # Cloud DLP output scanning — False disables post-generation PII scan
+    "dlp_enabled": _get_env_bool("DLP_ENABLED", True),
+    # GCP project ID for Cloud DLP API calls.
+    # Leave blank on Cloud Run — auto-detected from the GCP metadata server.
+    "dlp_project_id": os.getenv("DLP_PROJECT_ID", ""),
+    # True = return original text on DLP error; False = raise DLPScanError
+    "dlp_fail_open": _get_env_bool("DLP_FAIL_OPEN", True),
+    # Per-request DLP API timeout in seconds
+    "dlp_timeout_seconds": _get_env_float("DLP_TIMEOUT_SECONDS", 3.0) or 3.0,
+    # Audit log backend:
+    #   "stdout" — emit structured JSON to stdout (Cloud Run → Cloud Logging, no disk use)
+    #   "file"   — write JSONL to AUDIT_LOG_DIR (local development)
+    "audit_log_backend": _get_env_choice("AUDIT_LOG_BACKEND", {"stdout", "file"}, "stdout"),
+    # Only used when audit_log_backend="file"
+    "audit_log_dir": os.getenv("AUDIT_LOG_DIR", "/tmp/audit_logs"),
+}

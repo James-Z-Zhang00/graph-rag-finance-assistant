@@ -16,6 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN mkdir -p /app/cache/model && \
     python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='/app/cache/model')"
 
+# Download spaCy NER model at build time — required by Presidio for PERSON_NAME
+# and STREET_ADDRESS detection. Baking it in prevents a 560 MB runtime download.
+RUN python -m spacy download en_core_web_lg
+
 COPY search-service/ .
 
 EXPOSE 8003
