@@ -18,7 +18,7 @@ RUN mkdir -p /app/cache/model && \
 
 # Download spaCy NER model at build time — required by Presidio for PERSON_NAME
 # and STREET_ADDRESS detection. Baking it in prevents a 560 MB runtime download.
-RUN python -m spacy download en_core_web_lg
+RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.7.1/en_core_web_lg-3.7.1-py3-none-any.whl
 
 COPY search-service/ .
 
