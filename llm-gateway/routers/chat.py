@@ -30,15 +30,18 @@ async def chat_completions(
     request_body = body.model_dump(exclude_none=True)
 
     last_user_msg = next(
-        (m.get("content", "") for m in reversed(body.messages) if m.get("role") == "user"),
+        (m.content for m in reversed(body.messages) if m.role == "user"),
         "",
     )
+    if isinstance(last_user_msg, list):
+        last_user_msg = str(last_user_msg)
+    last_user_msg = (last_user_msg or "")[:200]
     logger.info(
         "chat request model=%s stream=%s messages=%d | inbound_query=%s",
         body.model,
         body.stream,
         len(body.messages),
-        last_user_msg[:200],
+        last_user_msg,
     )
 
     try:
