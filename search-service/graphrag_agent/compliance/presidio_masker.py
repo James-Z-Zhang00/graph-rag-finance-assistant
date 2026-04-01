@@ -274,7 +274,6 @@ class PresidioMasker:
         mapping = {
             "PERSON": "PERSON_NAME",
             "LOCATION": "STREET_ADDRESS",
-            "DATE_TIME": "DATE_OF_BIRTH",
             "US_BANK_NUMBER": "FINANCIAL_ACCOUNT_NUMBER",
             "IBAN_CODE": "FINANCIAL_ACCOUNT_NUMBER",
             "CREDIT_CARD": "CREDIT_CARD_NUMBER",

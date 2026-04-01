@@ -92,7 +92,6 @@ class HybridSearchTool(BaseSearchTool):
             # Call LLM to extract keywords
             result = self.keyword_chain.invoke({"query": query})
 
-            print(f"DEBUG - LLM keyword result: {result[:100]}...") if len(str(result)) > 100 else print(f"DEBUG - LLM keyword result: {result}")
 
             # Parse JSON result
             try:
