@@ -206,6 +206,9 @@ CACHE_SETTINGS = {
 #                "upstash" uses Upstash Redis + Upstash Vector
 CACHE_BACKEND_TYPE = _get_env_choice("CACHE_BACKEND", {"local", "upstash"}, "local")
 
+# Set CACHE_DISABLED=true to bypass all cache reads and writes (e.g. during PII testing)
+CACHE_DISABLED = _get_env_bool("CACHE_DISABLED", False)
+
 UPSTASH_SETTINGS = {
     "redis_url": os.getenv("UPSTASH_REDIS_REST_URL", ""),
     "redis_token": os.getenv("UPSTASH_REDIS_REST_TOKEN", ""),

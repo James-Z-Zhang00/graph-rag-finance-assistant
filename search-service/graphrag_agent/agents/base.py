@@ -16,7 +16,7 @@ from graphrag_agent.cache_manager.manager import (
     HybridCacheBackend
 )
 from graphrag_agent.cache_manager.strategies.global_strategy import GlobalCacheKeyStrategy
-from graphrag_agent.config.settings import AGENT_SETTINGS, CACHE_BACKEND_TYPE, UPSTASH_SETTINGS
+from graphrag_agent.config.settings import AGENT_SETTINGS, CACHE_BACKEND_TYPE, CACHE_DISABLED, UPSTASH_SETTINGS
 
 class BaseAgent(ABC):
     """Agent base class defining common functionality and interfaces"""
@@ -349,11 +349,14 @@ class BaseAgent(ABC):
 
     def _check_all_caches(self, query: str, thread_id: str = "default"):
         """Consolidated cache check method"""
+        if CACHE_DISABLED:
+            return None
+
         cache_check_start = time.time()
 
         # 1. First try global cache (cross-session cache)
         global_result = self.global_cache_manager.get(query)
-        if global_result:
+        if global_result and isinstance(global_result, str):
             cache_time = time.time() - cache_check_start
             self._log_performance("cache_check", {
                 "duration": cache_time,
@@ -364,7 +367,7 @@ class BaseAgent(ABC):
 
         # 2. Try fast path - high-quality cache skipping validation
         fast_result = self.check_fast_cache(query, thread_id)
-        if fast_result:
+        if fast_result and isinstance(fast_result, str):
             # Sync hit content to global cache
             self.global_cache_manager.set(query, fast_result)
 
@@ -378,7 +381,7 @@ class BaseAgent(ABC):
 
         # 3. Try standard cache path with optimized validation
         cached_response = self.cache_manager.get(query, skip_validation=True, thread_id=thread_id)
-        if cached_response:
+        if cached_response and isinstance(cached_response, str):
             # Sync hit content to global cache
             self.global_cache_manager.set(query, cached_response)
 
@@ -414,10 +417,10 @@ class BaseAgent(ABC):
 
         # First try global cache (cross-session cache)
         global_cache_start = time.time()
-        global_result = self.global_cache_manager.get(safe_query)
+        global_result = None if CACHE_DISABLED else self.global_cache_manager.get(safe_query)
         global_cache_time = time.time() - global_cache_start
 
-        if global_result:
+        if global_result and isinstance(global_result, str):
             return {
                 "answer": global_result,
                 "execution_log": [{"node": "global_cache_hit", "timestamp": time.time(), "output": "Global cache hit"}]
@@ -425,13 +428,11 @@ class BaseAgent(ABC):
 
         # First try fast path - high-quality cache skipping validation
         fast_cache_start = time.time()
-        fast_result = self.check_fast_cache(safe_query, thread_id)
+        fast_result = None if CACHE_DISABLED else self.check_fast_cache(safe_query, thread_id)
         fast_cache_time = time.time() - fast_cache_start
 
-        if fast_result:
-            # Sync hit content to global cache
+        if fast_result and isinstance(fast_result, str):
             self.global_cache_manager.set(safe_query, fast_result)
-
             return {
                 "answer": fast_result,
                 "execution_log": [{"node": "fast_cache_hit", "timestamp": time.time(), "output": "High-quality cache hit"}]
@@ -439,13 +440,11 @@ class BaseAgent(ABC):
 
         # Try standard cache path
         cache_start = time.time()
-        cached_response = self.cache_manager.get(safe_query, thread_id=thread_id)
+        cached_response = None if CACHE_DISABLED else self.cache_manager.get(safe_query, thread_id=thread_id)
         cache_time = time.time() - cache_start
 
-        if cached_response:
-            # Sync hit content to global cache
+        if cached_response and isinstance(cached_response, str):
             self.global_cache_manager.set(safe_query, cached_response)
-
             return {
                 "answer": cached_response,
                 "execution_log": [{"node": "cache_hit", "timestamp": time.time(), "output": "Standard cache hit"}]
@@ -470,11 +469,8 @@ class BaseAgent(ABC):
             chat_history = self.memory.get(config)["channel_values"]["messages"]
             answer = chat_history[-1].content
 
-            # Cache results - update both session cache and global cache
-            if answer and len(answer) > 10:
-                # Update session cache
+            if not CACHE_DISABLED and answer and len(answer) > 10:
                 self.cache_manager.set(safe_query, answer, thread_id=thread_id)
-                # Update global cache
                 self.global_cache_manager.set(safe_query, answer)
 
             process_time = time.time() - process_start
@@ -532,11 +528,8 @@ class BaseAgent(ABC):
             chat_history = self.memory.get(config)["channel_values"]["messages"]
             answer = chat_history[-1].content
 
-            # Cache results - update both session cache and global cache
-            if answer and len(answer) > 10:
-                # Update session cache
+            if not CACHE_DISABLED and answer and len(answer) > 10:
                 self.cache_manager.set(safe_query, answer, thread_id=thread_id)
-                # Update global cache
                 self.global_cache_manager.set(safe_query, answer)
 
             process_time = time.time() - process_start
@@ -570,7 +563,7 @@ class BaseAgent(ABC):
         safe_query = query.strip()
 
         # First try global cache (cross-session cache)
-        global_result = self.global_cache_manager.get(safe_query)
+        global_result = None if CACHE_DISABLED else self.global_cache_manager.get(safe_query)
         if global_result and not isinstance(global_result, str):
             global_result = None
         if global_result:
@@ -594,7 +587,7 @@ class BaseAgent(ABC):
             return
 
         # First try fast path - high-quality cache skipping validation
-        fast_result = self.check_fast_cache(safe_query, thread_id)
+        fast_result = None if CACHE_DISABLED else self.check_fast_cache(safe_query, thread_id)
         if fast_result and not isinstance(fast_result, str):
             fast_result = None
         if fast_result:

@@ -14,7 +14,7 @@ from graphrag_agent.config.prompts import (
     LC_SYSTEM_PROMPT,
     HYBRID_AGENT_GENERATE_PROMPT,
 )
-from graphrag_agent.config.settings import response_type
+from graphrag_agent.config.settings import response_type, CACHE_DISABLED
 from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
 from graphrag_agent.agents.base import BaseAgent
 from graphrag_agent.compliance import (
@@ -166,16 +166,16 @@ class HybridAgent(BaseAgent):
         }, pipeline_stage="retrieval")
 
         # First try global cache
-        global_result = self.global_cache_manager.get(question)
-        if global_result:
+        global_result = None if CACHE_DISABLED else self.global_cache_manager.get(question)
+        if global_result and isinstance(global_result, str):
             self._log_execution("generate",
                             {"question": question, "docs_length": len(docs)},
                             "Global cache hit")
             return {"messages": [AIMessage(content=global_result)]}
 
         # Then check session cache
-        cached_result = self.cache_manager.get(question, thread_id=thread_id)
-        if cached_result:
+        cached_result = None if CACHE_DISABLED else self.cache_manager.get(question, thread_id=thread_id)
+        if cached_result and isinstance(cached_result, str):
             self._log_execution("generate",
                             {"question": question, "docs_length": len(docs)},
                             "Session cache hit")
@@ -195,8 +195,7 @@ class HybridAgent(BaseAgent):
                 "response_type": response_type
             })
 
-            # Cache results
-            if response and len(response) > 10:
+            if not CACHE_DISABLED and response and len(response) > 10:
                 self.cache_manager.set(question, response, thread_id=thread_id)
                 self.global_cache_manager.set(question, response)
 
