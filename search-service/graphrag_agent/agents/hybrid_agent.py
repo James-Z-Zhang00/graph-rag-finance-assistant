@@ -5,7 +5,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
 import asyncio
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 from graphrag_agent.config.prompts import (
     LC_SYSTEM_PROMPT,
@@ -325,13 +328,17 @@ class HybridAgent(BaseAgent):
         # --- Boundary 2: DLP scan of LLM output before returning to caller ---
         if self._dlp_scanner and result.get("answer"):
             from graphrag_agent.compliance.request_context import get_request_id
+            logger.info("dlp_scan | pre_scan answer[:200]=%s", result["answer"][:200])
             dlp_result = self._dlp_scanner.scan(
                 result["answer"],
                 session_id=thread_id,
                 request_id=get_request_id(),
             )
             if dlp_result.has_findings:
+                logger.info("dlp_scan | findings=%s post_scan answer[:200]=%s", dlp_result.findings, dlp_result.redacted_text[:200])
                 result["answer"] = dlp_result.redacted_text
+            else:
+                logger.info("dlp_scan | no findings")
 
         # Attach compliance fields to result
         result["citations"] = self._last_citations
