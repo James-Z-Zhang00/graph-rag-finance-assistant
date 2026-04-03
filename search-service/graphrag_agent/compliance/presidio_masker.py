@@ -60,10 +60,23 @@ class MaskResult:
 _SSN_PATTERN = r"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b"
 # Last-4 SSN with context words
 _SSN_LAST4_PATTERN = r"(?:SSN|social\s+security)[^\d]{0,20}(\d{4})\b"
-# ABA routing number (9 digits) gated on context words
-_ROUTING_PATTERN = r"(?:routing|ABA|account)[^\d]{0,15}(\d{9})\b"
+# ABA routing number (exactly 9 digits) gated on context words
+_ROUTING_PATTERN = r"(?:routing|ABA)[^\d]{0,15}(\d{9})\b"
+# Bank account numbers (8–17 digits) preceded by "account" / "acct" keyword
+_BANK_ACCOUNT_PATTERN = (
+    r"(?:account|acct)\.?\s*(?:#|number|no\.?)?\s*\d{8,17}\b"
+)
 # IBAN: up to 34 alphanumeric chars starting with 2-letter country code
 _IBAN_PATTERN = r"\b[A-Z]{2}\d{2}[A-Z0-9]{4,30}\b"
+# Credit / debit card numbers with dash or space separators (dddd-dddd-dddd-dddd)
+_CREDIT_CARD_FORMATTED_PATTERN = r"\b\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}\b"
+# Phone formats that Presidio's built-in recogniser under-detects
+_PHONE_SUPPLEMENT_PATTERN = (
+    r"(?:"
+    r"\+1[-\s]\d{3}[-\s]\d{3}[-\s]\d{4}"   # +1-NXX-NXX-XXXX
+    r"|\(\d{3}\)\s*\d{3}[-.\s]\d{4}"        # (NXX) NXX-XXXX
+    r")"
+)
 # Date of birth — requires context words to avoid masking fiscal dates
 _DOB_CONTEXT = r"(?:born|birth(?:day|date)?|DOB|date\s+of\s+birth)"
 _DOB_PATTERN = (
@@ -76,6 +89,32 @@ _DOB_PATTERN = (
     r"|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
     r"\s+\d{1,2},?\s+\d{4})"
 )
+# US street address: house number + 1–5 name words + street-type suffix
+# + optional city (1–2 words) / state abbreviation / ZIP.
+# Requires a street number to avoid masking bare city/state names.
+_STREET_TYPE_SUFFIXES = (
+    r"(?:Street|St|Road|Rd|Avenue|Ave|Boulevard|Blvd|"
+    r"Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl|Plaza|"
+    r"Loop|Circle|Cir|Highway|Hwy|Parkway|Pkwy|"
+    r"Terrace|Ter|Trail|Trl)"
+)
+_US_ADDRESS_PATTERN = (
+    r"\b\d+\s+"                                                     # house/building number
+    r"(?:(?:N\.?|S\.?|E\.?|W\.?|North|South|East|West)\s+)?"       # optional direction
+    r"(?:\w+\s+){1,5}"                                              # 1–5 street-name words
+    + _STREET_TYPE_SUFFIXES +
+    r"\.?"                                                          # optional abbrev period
+    r"(?:\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)?"                     # optional city (1–2 words)
+    r"(?:,?\s+[A-Z]{2}\b)?"                                        # optional state abbrev
+    r"(?:,?\s+\d{5}(?:-\d{4})?)?"                                  # optional ZIP code
+)
+
+# Financial product / institution terms that spaCy may mis-tag as PERSON names
+_FINANCE_TERM_BLOCKLIST: frozenset = frozenset({
+    "roth", "ira", "fica", "futa", "cobra", "erisa", "gaap",
+    "sec", "fdic", "finra", "etf", "ipo", "fed", "fomc",
+    "nasdaq", "nyse", "amex", "dow", "vix", "libor", "sofr",
+})
 
 
 class PresidioMasker:
@@ -97,11 +136,15 @@ class PresidioMasker:
             "PHONE_NUMBER",
             "CREDIT_CARD",
             "US_SSN",
-            "PERSON",           # mapped → PERSON_NAME placeholder
-            "LOCATION",         # mapped → STREET_ADDRESS placeholder
+            "PERSON",           # filtered by _FINANCE_TERM_BLOCKLIST; mapped → PERSON_NAME
             "US_BANK_NUMBER",
             "IBAN_CODE",
-            "DATE_TIME",        # filtered by context — see _mask_with_regex_supplements
+            # DATE_TIME intentionally excluded — Presidio/spaCy flags fiscal years
+            #   ("2023"), "this year", and "annual" as PII. Real date-of-birth values
+            #   are caught by the context-gated _DOB_PATTERN regex supplement instead.
+            # LOCATION intentionally excluded — spaCy GPE tags bare city/state/country
+            #   names ("California", "New York State", "US") causing false positives.
+            #   Real street addresses are caught by _US_ADDRESS_PATTERN regex instead.
         ]
 
         try:
@@ -185,12 +228,21 @@ class PresidioMasker:
         from presidio_anonymizer.entities import OperatorConfig
 
         # --- Presidio analysis ---
-        results = self._analyzer.analyze(
+        raw_results = self._analyzer.analyze(
             text=text,
             language="en",
             entities=self._entities,
             score_threshold=self._score_threshold,
         )
+
+        # Filter out PERSON detections that match known financial terms (e.g. "Roth")
+        results = []
+        for r in raw_results:
+            if r.entity_type == "PERSON":
+                span_text = text[r.start:r.end].lower().strip()
+                if span_text in _FINANCE_TERM_BLOCKLIST:
+                    continue
+            results.append(r)
 
         detections: List[PIIDetection] = []
         operators = {}
@@ -238,15 +290,20 @@ class PresidioMasker:
     def _mask_with_regex_supplements(
         self, text: str
     ) -> Tuple[str, List[PIIDetection]]:
-        """Apply supplemental regex patterns for SSN variants, routing numbers, IBAN, and DOB."""
+        """Apply supplemental regex patterns for SSN variants, routing/account numbers,
+        IBAN, formatted credit cards, phone supplements, street addresses, and DOB."""
         detections: List[PIIDetection] = []
 
         supplements = [
-            (_SSN_PATTERN, "US_SSN", "regex/ssn-extended"),
-            (_SSN_LAST4_PATTERN, "US_SSN", "regex/ssn-last4"),
-            (_ROUTING_PATTERN, "FINANCIAL_ACCOUNT_NUMBER", "regex/aba-routing"),
-            (_IBAN_PATTERN, "FINANCIAL_ACCOUNT_NUMBER", "regex/iban"),
-            (_DOB_PATTERN, "DATE_OF_BIRTH", "regex/dob-context"),
+            (_SSN_PATTERN,                   "US_SSN",                    "regex/ssn-extended"),
+            (_SSN_LAST4_PATTERN,             "US_SSN",                    "regex/ssn-last4"),
+            (_ROUTING_PATTERN,               "FINANCIAL_ACCOUNT_NUMBER",  "regex/aba-routing"),
+            (_BANK_ACCOUNT_PATTERN,          "FINANCIAL_ACCOUNT_NUMBER",  "regex/bank-account"),
+            (_IBAN_PATTERN,                  "FINANCIAL_ACCOUNT_NUMBER",  "regex/iban"),
+            (_CREDIT_CARD_FORMATTED_PATTERN, "CREDIT_CARD_NUMBER",        "regex/credit-card-formatted"),
+            (_PHONE_SUPPLEMENT_PATTERN,      "PHONE_NUMBER",              "regex/phone-supplement"),
+            (_US_ADDRESS_PATTERN,            "STREET_ADDRESS",            "regex/us-address"),
+            (_DOB_PATTERN,                   "DATE_OF_BIRTH",             "regex/dob-context"),
         ]
 
         for pattern, entity_type, recognizer_id in supplements:
@@ -273,9 +330,9 @@ class PresidioMasker:
         """Map Presidio internal entity type names to GLBA-aligned names."""
         mapping = {
             "PERSON": "PERSON_NAME",
-            "LOCATION": "STREET_ADDRESS",
             "US_BANK_NUMBER": "FINANCIAL_ACCOUNT_NUMBER",
             "IBAN_CODE": "FINANCIAL_ACCOUNT_NUMBER",
             "CREDIT_CARD": "CREDIT_CARD_NUMBER",
+            # LOCATION removed — no longer in self._entities
         }
         return mapping.get(presidio_type, presidio_type)

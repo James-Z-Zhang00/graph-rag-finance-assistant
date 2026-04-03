@@ -52,7 +52,11 @@ def _resolve_project_id(project_id: str) -> str:
         logger.debug("DLPOutputScanner: GCP metadata server not reachable — DLP disabled.")
         return ""
 
-# Cloud DLP infoTypes targeting GLBA-relevant output risks
+# Cloud DLP infoTypes targeting GLBA-relevant output risks.
+# DATE_OF_BIRTH intentionally excluded: Layer 1 (Presidio _DOB_PATTERN) strips real DOBs
+# from the query before the LLM sees them, so the LLM cannot echo a real DOB back.
+# LLM responses routinely contain policy dates preceded by "born in / born before"
+# (e.g. Social Security FRA tables) which DLP would incorrectly redact as DATE_OF_BIRTH.
 _DLP_INFO_TYPES = [
     {"name": "US_SOCIAL_SECURITY_NUMBER"},
     {"name": "CREDIT_CARD_NUMBER"},
@@ -60,7 +64,6 @@ _DLP_INFO_TYPES = [
     {"name": "PHONE_NUMBER"},
     {"name": "PERSON_NAME"},
     {"name": "STREET_ADDRESS"},
-    {"name": "DATE_OF_BIRTH"},
     {"name": "US_BANK_ROUTING_MICR"},
     {"name": "IBAN_CODE"},
     {"name": "US_INDIVIDUAL_TAXPAYER_IDENTIFICATION_NUMBER"},
@@ -208,8 +211,8 @@ class DLPOutputScanner:
         """Execute the Cloud DLP inspect_content() gRPC call."""
         inspect_config = {
             "info_types": _DLP_INFO_TYPES,
-            "min_likelihood": "POSSIBLE",
-            "include_quote": False,
+            "min_likelihood": "LIKELY",   # POSSIBLE causes false positives on financial
+            "include_quote": False,       # terms like "Roth" being tagged as PERSON_NAME
         }
         item = {"value": text}
         return self._client.inspect_content(
