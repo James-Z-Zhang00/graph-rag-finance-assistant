@@ -58,8 +58,11 @@ class MaskResult:
 
 # SSN: hyphen, space, or no-delimiter variants
 _SSN_PATTERN = r"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b"
-# Last-4 SSN with context words
-_SSN_LAST4_PATTERN = r"(?:SSN|social\s+security)[^\d]{0,20}(\d{4})\b"
+# Last-4 SSN with context words.
+# (?<!_)SSN  — blocks matching "SSN" inside an existing [PII:US_SSN] placeholder.
+# [^\d\[]{0,20} — excludes "[" from the gap so the pattern cannot jump over an
+#   existing placeholder and land on a following street number (e.g. SSN [PII:US_SSN], 1000).
+_SSN_LAST4_PATTERN = r"(?:(?<!_)SSN|social\s+security)[^\d\[]{0,20}(\d{4})\b"
 # ABA routing number (exactly 9 digits) gated on context words
 _ROUTING_PATTERN = r"(?:routing|ABA)[^\d]{0,15}(\d{9})\b"
 # Bank account numbers (8–17 digits) preceded by "account" / "acct" keyword.
