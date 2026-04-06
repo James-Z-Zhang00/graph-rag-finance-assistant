@@ -211,8 +211,8 @@ class DLPOutputScanner:
         """Execute the Cloud DLP inspect_content() gRPC call."""
         inspect_config = {
             "info_types": _DLP_INFO_TYPES,
-            "min_likelihood": "LIKELY",   # POSSIBLE causes false positives on financial
-            "include_quote": False,       # terms like "Roth" being tagged as PERSON_NAME
+            "min_likelihood": "VERY_LIKELY",  # LIKELY still causes false positives on policy
+            "include_quote": False,           # dates / financial terms in LLM responses
         }
         item = {"value": text}
         return self._client.inspect_content(

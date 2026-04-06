@@ -62,19 +62,24 @@ _SSN_PATTERN = r"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b"
 _SSN_LAST4_PATTERN = r"(?:SSN|social\s+security)[^\d]{0,20}(\d{4})\b"
 # ABA routing number (exactly 9 digits) gated on context words
 _ROUTING_PATTERN = r"(?:routing|ABA)[^\d]{0,15}(\d{9})\b"
-# Bank account numbers (8–17 digits) preceded by "account" / "acct" keyword
+# Bank account numbers (8–17 digits) preceded by "account" / "acct" keyword.
+# [^\w]{0,5} allows backtick, quote, or other punctuation between keyword and digits
+# (e.g. account `9876543210`).
 _BANK_ACCOUNT_PATTERN = (
-    r"(?:account|acct)\.?\s*(?:#|number|no\.?)?\s*\d{8,17}\b"
+    r"(?:account|acct)\.?\s*(?:#|number|no\.?)?[^\w]{0,5}\d{8,17}\b"
 )
 # IBAN: up to 34 alphanumeric chars starting with 2-letter country code
 _IBAN_PATTERN = r"\b[A-Z]{2}\d{2}[A-Z0-9]{4,30}\b"
 # Credit / debit card numbers with dash or space separators (dddd-dddd-dddd-dddd)
 _CREDIT_CARD_FORMATTED_PATTERN = r"\b\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}\b"
-# Phone formats that Presidio's built-in recogniser under-detects
+# Phone formats that Presidio's built-in recogniser under-detects.
+# NXX-NXX-XXXX added for plain dash-separated format (e.g. 555-234-5678)
+# that Presidio may score below the 0.7 threshold without a country code or parens.
 _PHONE_SUPPLEMENT_PATTERN = (
     r"(?:"
     r"\+1[-\s]\d{3}[-\s]\d{3}[-\s]\d{4}"   # +1-NXX-NXX-XXXX
     r"|\(\d{3}\)\s*\d{3}[-.\s]\d{4}"        # (NXX) NXX-XXXX
+    r"|\b\d{3}-\d{3}-\d{4}\b"               # NXX-NXX-XXXX (standard dashes, no prefix)
     r")"
 )
 # Date of birth — requires context words to avoid masking fiscal dates
@@ -92,21 +97,28 @@ _DOB_PATTERN = (
 # US street address: house number + 1–5 name words + street-type suffix
 # + optional city (1–2 words) / state abbreviation / ZIP.
 # Requires a street number to avoid masking bare city/state names.
+#
+# Suffix ordering: full words MUST appear before their abbreviations so the
+# alternation doesn't prematurely match "Pl" inside "Plaza", "St" inside
+# "Street", etc. (Python regex takes the first alternative that fits.)
 _STREET_TYPE_SUFFIXES = (
-    r"(?:Street|St|Road|Rd|Avenue|Ave|Boulevard|Blvd|"
-    r"Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl|Plaza|"
-    r"Loop|Circle|Cir|Highway|Hwy|Parkway|Pkwy|"
-    r"Terrace|Ter|Trail|Trl)"
+    r"(?:Boulevard|Parkway|Highway|Terrace|Street|Avenue|Circle|"
+    r"Plaza|Drive|Court|Place|Trail|Road|Lane|Loop|Way|"
+    r"Blvd|Pkwy|Hwy|Ter|Ave|Cir|Trl|Dr|Ct|Pl|St|Rd|Ln)"
 )
+# [^\w]{1,3} is a flexible separator that accepts spaces, commas, backticks,
+# quotes, or any combination (1–3 non-word chars) between address components.
+# Using {1,3} (min 1) prevents greedily consuming trailing punctuation when
+# there is no city/state/zip following the street type.
 _US_ADDRESS_PATTERN = (
     r"\b\d+\s+"                                                     # house/building number
     r"(?:(?:N\.?|S\.?|E\.?|W\.?|North|South|East|West)\s+)?"       # optional direction
     r"(?:\w+\s+){1,5}"                                              # 1–5 street-name words
     + _STREET_TYPE_SUFFIXES +
     r"\.?"                                                          # optional abbrev period
-    r"(?:\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)?"                     # optional city (1–2 words)
-    r"(?:,?\s+[A-Z]{2}\b)?"                                        # optional state abbrev
-    r"(?:,?\s+\d{5}(?:-\d{4})?)?"                                  # optional ZIP code
+    r"(?:[^\w]{1,3}[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)?"              # optional city (sep + 1–2 words)
+    r"(?:[^\w]{1,3}[A-Z]{2}\b)?"                                   # optional state abbrev
+    r"(?:[^\w]{1,3}\d{5}(?:-\d{4})?)?"                             # optional ZIP code
 )
 
 # Financial product / institution terms that spaCy may mis-tag as PERSON names
