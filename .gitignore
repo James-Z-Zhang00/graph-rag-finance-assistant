@@ -66,9 +66,6 @@ venv/
 .DS_Store
 .claude/
 
-# ── Project plans (local only) ────────────────────────────────────────────────
-project-plans/
-
 # ── Eval (local only, never deployed) ─────────────────────────────────────────
 eval/.env
 eval/results/
