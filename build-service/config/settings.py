@@ -22,8 +22,8 @@ FILE_REGISTRY_PATH = os.getenv("FILE_REGISTRY_PATH", "./file_registry.json")
 SEC_PARSER_URL = os.getenv("SEC_PARSER_URL", "http://localhost:8001")
 
 # Directory of source files to pass to sec-parser for full builds (local fallback)
-SEC_FILES_DIR = os.getenv("SEC_FILES_DIR", "../static-files/small")
+SEC_FILES_DIR = os.getenv("SEC_FILES_DIR", "../static-files/medium")
 
 # GCS — if GCS_BUCKET_NAME is set, full builds download from GCS instead of SEC_FILES_DIR
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "")
-GCS_FILES_PREFIX = os.getenv("GCS_FILES_PREFIX", "small/")
+GCS_FILES_PREFIX = os.getenv("GCS_FILES_PREFIX", "medium/")

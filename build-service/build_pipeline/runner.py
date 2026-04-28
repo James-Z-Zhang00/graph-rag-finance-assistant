@@ -28,7 +28,7 @@ from build_pipeline.job_store import job_store
 
 
 def run_full_build(job_id: str, sec_files_dir: str, sec_parser_url: str,
-                   gcs_bucket: str = "", gcs_prefix: str = "small/"):
+                   gcs_bucket: str = "", gcs_prefix: str = "medium/"):
     """
     Full build pipeline:
       1. (Optional) Download source files from GCS to a temp dir
@@ -59,10 +59,14 @@ def run_full_build(job_id: str, sec_files_dir: str, sec_parser_url: str,
         ]
         upload_files = []
         open_handles = []
+        base = Path(sec_files_dir)
         for p in file_paths:
+            # Flatten the relative path to a single filename so files from
+            # different subdirectories never collide in sec-parser's temp dir.
+            flat_name = str(p.relative_to(base)).replace("/", "_").replace("\\", "_")
             fh = open(p, "rb")
             open_handles.append(fh)
-            upload_files.append(("files", (p.name, fh, "application/octet-stream")))
+            upload_files.append(("files", (flat_name, fh, "application/octet-stream")))
         try:
             resp = requests.post(
                 parse_url,
