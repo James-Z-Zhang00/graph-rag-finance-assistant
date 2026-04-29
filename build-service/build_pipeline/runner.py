@@ -27,7 +27,7 @@ except RuntimeError:
 from build_pipeline.job_store import job_store
 
 # Keep each multipart POST well under Cloud Run's 32 MB request-body limit.
-_PARSE_BATCH_BYTES = 20 * 1024 * 1024  # 20 MB
+_PARSE_BATCH_BYTES = 10 * 1024 * 1024  # 10 MB — smaller batches reduce per-batch memory pressure
 
 
 def _parse_files_in_batches(
