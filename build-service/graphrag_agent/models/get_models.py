@@ -23,41 +23,60 @@ def setup_cache():
 setup_cache()
 
 
-def _llm_gateway_auth_headers() -> dict:
-    """Return a Bearer identity token header when running on Cloud Run, empty dict locally."""
+def _make_oidc_http_client():
+    """
+    Return an httpx.Client that fetches a fresh Google OIDC token for every
+    request when running on Cloud Run. Returns None locally (no auth needed).
+
+    Using a per-request token avoids the 1-hour expiry that bites long builds
+    when the token is fetched once at model creation and reused for all LLM calls.
+    """
     if not os.getenv("K_SERVICE"):
-        return {}
+        return None
     try:
+        import httpx
         from google.auth.transport.requests import Request
         from google.oauth2 import id_token
-        # Audience is the llm-gateway base URL (strip /v1 suffix)
+
         audience = OPENAI_BASE_URL.rstrip("/")
         if audience.endswith("/v1"):
             audience = audience[:-3]
-        token = id_token.fetch_id_token(Request(), audience)
-        return {"Authorization": f"Bearer {token}"}
+
+        class _OIDCAuth(httpx.Auth):
+            def auth_flow(self, request):
+                token = id_token.fetch_id_token(Request(), audience)
+                request.headers["Authorization"] = f"Bearer {token}"
+                yield request
+
+        return httpx.Client(auth=_OIDCAuth())
     except Exception:
-        return {}
+        return None
 
 
 def get_embeddings_model():
     config = {k: v for k, v in OPENAI_EMBEDDING_CONFIG.items() if v}
-    config["default_headers"] = _llm_gateway_auth_headers()
+    http_client = _make_oidc_http_client()
+    if http_client:
+        config["http_client"] = http_client
     return OpenAIEmbeddings(**config)
 
 
 def get_llm_model():
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
-    config["default_headers"] = _llm_gateway_auth_headers()
+    http_client = _make_oidc_http_client()
+    if http_client:
+        config["http_client"] = http_client
     return ChatOpenAI(**config)
 
 def get_stream_llm_model():
     callback_handler = AsyncIteratorCallbackHandler()
-    # Wrap the callback handler in an AsyncCallbackManager
     manager = AsyncCallbackManager(handlers=[callback_handler])
 
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
-    config.update({"streaming": True, "callbacks": manager, "default_headers": _llm_gateway_auth_headers()})
+    config.update({"streaming": True, "callbacks": manager})
+    http_client = _make_oidc_http_client()
+    if http_client:
+        config["http_client"] = http_client
     return ChatOpenAI(**config)
 
 def count_tokens(text):
