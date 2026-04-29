@@ -26,6 +26,58 @@ except RuntimeError:
 
 from build_pipeline.job_store import job_store
 
+# Keep each multipart POST well under Cloud Run's 32 MB request-body limit.
+_PARSE_BATCH_BYTES = 20 * 1024 * 1024  # 20 MB
+
+
+def _parse_files_in_batches(
+    file_paths: list,
+    base: Path,
+    parse_url: str,
+    auth_headers: dict,
+    timeout: int = 600,
+) -> list:
+    """
+    Upload files to sec-parser in size-bounded batches and return all documents.
+    Splitting avoids Cloud Run's 32 MB per-request body limit.
+    """
+    import requests
+
+    # Group files into batches that stay under the size cap.
+    batches: list[list] = []
+    current_batch: list = []
+    current_size = 0
+    for p in file_paths:
+        size = p.stat().st_size
+        if current_batch and current_size + size > _PARSE_BATCH_BYTES:
+            batches.append(current_batch)
+            current_batch = []
+            current_size = 0
+        current_batch.append(p)
+        current_size += size
+    if current_batch:
+        batches.append(current_batch)
+
+    all_documents: list = []
+    for i, batch in enumerate(batches):
+        print(f"[runner] sec-parse batch {i + 1}/{len(batches)} ({len(batch)} file(s))")
+        upload_files = []
+        open_handles = []
+        for p in batch:
+            flat_name = str(p.relative_to(base)).replace("/", "_").replace("\\", "_")
+            fh = open(p, "rb")
+            open_handles.append(fh)
+            upload_files.append(("files", (flat_name, fh, "application/octet-stream")))
+        try:
+            resp = requests.post(parse_url, files=upload_files, headers=auth_headers, timeout=timeout)
+            resp.raise_for_status()
+            all_documents.extend(resp.json()["documents"])
+        finally:
+            for fh in open_handles:
+                fh.close()
+
+    return all_documents
+
 
 def run_full_build(job_id: str, sec_files_dir: str, sec_parser_url: str,
                    gcs_bucket: str = "", gcs_prefix: str = "medium/"):
@@ -40,8 +92,6 @@ def run_full_build(job_id: str, sec_files_dir: str, sec_parser_url: str,
     """
     import tempfile
     try:
-        import requests
-
         # Stage 1 (optional): pull files from GCS into a temp dir
         if gcs_bucket:
             job_store.mark_running(job_id, stage="gcs_download")
@@ -57,28 +107,10 @@ def run_full_build(job_id: str, sec_files_dir: str, sec_parser_url: str,
         file_paths = [
             p for p in Path(sec_files_dir).rglob("*") if p.is_file()
         ]
-        upload_files = []
-        open_handles = []
-        base = Path(sec_files_dir)
-        for p in file_paths:
-            # Flatten the relative path to a single filename so files from
-            # different subdirectories never collide in sec-parser's temp dir.
-            flat_name = str(p.relative_to(base)).replace("/", "_").replace("\\", "_")
-            fh = open(p, "rb")
-            open_handles.append(fh)
-            upload_files.append(("files", (flat_name, fh, "application/octet-stream")))
-        try:
-            resp = requests.post(
-                parse_url,
-                files=upload_files,
-                headers=_auth_headers(sec_parser_url),
-                timeout=600,
-            )
-        finally:
-            for fh in open_handles:
-                fh.close()
-        resp.raise_for_status()
-        documents = resp.json()["documents"]
+        documents = _parse_files_in_batches(
+            file_paths, Path(sec_files_dir), parse_url,
+            _auth_headers(sec_parser_url), timeout=600,
+        )
         print(f"[runner] sec-parser returned {len(documents)} document(s)")
 
         # Lazy imports after mp.set_start_method
