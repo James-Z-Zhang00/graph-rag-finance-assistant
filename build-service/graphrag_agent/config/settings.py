@@ -134,7 +134,7 @@ naive_description = (
 
 # ===== Performance Tuning Configuration =====
 
-MAX_WORKERS = _get_env_int("MAX_WORKERS", 4) or 4  # Parallel worker threads
+MAX_WORKERS = _get_env_int("MAX_WORKERS", 2) or 2  # Parallel worker threads
 BATCH_SIZE = _get_env_int("BATCH_SIZE", 100) or 100  # General batch size
 ENTITY_BATCH_SIZE = _get_env_int("ENTITY_BATCH_SIZE", 50) or 50  # Entity batch size
 CHUNK_BATCH_SIZE = _get_env_int("CHUNK_BATCH_SIZE", 100) or 100  # Text chunk batch size

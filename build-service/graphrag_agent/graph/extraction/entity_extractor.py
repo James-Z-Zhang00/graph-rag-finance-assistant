@@ -330,7 +330,7 @@ class EntityRelationExtractor:
         parts = batch_content.split(f"\n{'-'*50}\n")
         return [part.strip() for part in parts]
 
-    @retry(times=3, exceptions=(Exception,), delay=1.0)
+    @retry(times=5, exceptions=(Exception,), delay=30.0, backoff=2.0, max_delay=300.0)
     def _process_single_chunk(self, input_text: str) -> str:
         """
         Process a single text chunk (with caching).

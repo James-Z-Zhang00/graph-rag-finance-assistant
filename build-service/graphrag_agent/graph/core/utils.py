@@ -74,21 +74,27 @@ def batch_process(items: List[Any],
 
     return results
 
-def retry(times: int = 3, exceptions: tuple = (Exception,), delay: float = 1.0):
+def retry(times: int = 3, exceptions: tuple = (Exception,), delay: float = 1.0,
+          backoff: float = 1.0, max_delay: float = None):
     """
-    Retry decorator.
+    Retry decorator with optional exponential backoff.
 
     Args:
         times: Maximum number of retries
         exceptions: Exception types to catch
-        delay: Delay in seconds between retries
+        delay: Initial delay in seconds between retries
+        backoff: Multiplier applied to delay after each attempt (1.0 = constant)
+        max_delay: Cap on delay (seconds); None means no cap
 
     Returns:
         Wrapped function
     """
+    import random as _random
+
     def decorator(func):
         def wrapper(*args, **kwargs):
             attempt = 0
+            current_delay = delay
             while attempt < times:
                 try:
                     return func(*args, **kwargs)
@@ -96,8 +102,12 @@ def retry(times: int = 3, exceptions: tuple = (Exception,), delay: float = 1.0):
                     attempt += 1
                     if attempt >= times:
                         raise
-                    print(f"Function {func.__name__} failed: {e}, retrying ({attempt}/{times})")
-                    time.sleep(delay)
+                    wait = current_delay + _random.uniform(0, current_delay * 0.1)
+                    if max_delay is not None:
+                        wait = min(wait, max_delay)
+                    print(f"Function {func.__name__} failed: {e}, retrying ({attempt}/{times}) after {wait:.1f}s")
+                    time.sleep(wait)
+                    current_delay *= backoff
         return wrapper
     return decorator
 
