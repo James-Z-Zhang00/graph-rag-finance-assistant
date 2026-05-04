@@ -81,6 +81,12 @@ class GraphConnectionManager:
         except Exception as e:
             print(f"Error dropping index {index_name} (ignorable): {e}")
 
+    def reset(self):
+        """Sync to the fresh db_manager graph after a db_manager.reset() call."""
+        db_manager = get_db_manager()
+        self.graph = db_manager.graph
+        print("[connection_manager] synced to fresh Neo4j graph")
+
     def drop_all_indexes(self) -> None:
         """
         Drop all indexes (including regular and vector indexes).

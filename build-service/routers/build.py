@@ -69,6 +69,14 @@ def connectivity_check():
     return results
 
 
+def _log_build_done(future):
+    """Callback that logs any unhandled exception that escaped the build runner."""
+    exc = future.exception()
+    if exc:
+        import traceback as _tb
+        print(f"[build] unhandled exception in build thread:\n{''.join(_tb.format_exception(type(exc), exc, exc.__traceback__))}")
+
+
 @router.post("/full", response_model=TriggerResponse)
 async def trigger_full_build():
     """Trigger a full graph build (drop indexes → build graph → index community → chunk index)."""
@@ -78,8 +86,9 @@ async def trigger_full_build():
         raise HTTPException(status_code=409, detail=f"A build is already running: {running[0]['job_id']}")
 
     job = job_store.create("full")
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(_executor, run_full_build, job.job_id, SEC_FILES_DIR, SEC_PARSER_URL, GCS_BUCKET_NAME, GCS_FILES_PREFIX)
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(_executor, run_full_build, job.job_id, SEC_FILES_DIR, SEC_PARSER_URL, GCS_BUCKET_NAME, GCS_FILES_PREFIX)
+    future.add_done_callback(_log_build_done)
     return TriggerResponse(job_id=job.job_id, message="Full build started")
 
 
@@ -91,8 +100,9 @@ async def trigger_incremental_build():
         raise HTTPException(status_code=409, detail=f"A build is already running: {running[0]['job_id']}")
 
     job = job_store.create("incremental")
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(_executor, run_incremental_build, job.job_id, FILES_DIR, FILE_REGISTRY_PATH)
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(_executor, run_incremental_build, job.job_id, FILES_DIR, FILE_REGISTRY_PATH)
+    future.add_done_callback(_log_build_done)
     return TriggerResponse(job_id=job.job_id, message="Incremental build started")
 
 

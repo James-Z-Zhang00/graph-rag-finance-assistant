@@ -87,6 +87,25 @@ class DBConnectionManager:
         if self.driver:
             self.driver.close()
 
+    def reset(self):
+        """Close stale connections and open a fresh driver + graph. Call at the start of each build."""
+        print("[neo4j] resetting connections: closing old driver...")
+        self.close()
+        self.session_pool = []
+        self.driver = GraphDatabase.driver(
+            self.neo4j_uri,
+            auth=(self.neo4j_username, self.neo4j_password),
+            max_connection_pool_size=self.max_pool_size,
+        )
+        self.graph = Neo4jGraph(
+            url=self.neo4j_uri,
+            username=self.neo4j_username,
+            password=self.neo4j_password,
+            database=self.neo4j_database,
+            refresh_schema=NEO4J_CONFIG["refresh_schema"],
+        )
+        print("[neo4j] fresh driver and graph ready")
+
     def __enter__(self):
         return self
 

@@ -3,8 +3,11 @@ Pipeline runner — executes graph build stages in a background thread.
 Each stage updates the job's stage field so callers can poll progress.
 """
 
+import glob
 import os
 import multiprocessing as mp
+import shutil
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -17,6 +20,18 @@ def _auth_headers(audience: str) -> dict:
     from google.oauth2 import id_token
     token = id_token.fetch_id_token(Request(), audience)
     return {"Authorization": f"Bearer {token}"}
+
+
+def _cleanup_old_temp_dirs():
+    """Remove any gcs-sec-files-* temp dirs left over from previous failed builds."""
+    pattern = os.path.join(tempfile.gettempdir(), "gcs-sec-files-*")
+    for old_dir in glob.glob(pattern):
+        try:
+            shutil.rmtree(old_dir, ignore_errors=True)
+            print(f"[runner] cleaned up leftover temp dir: {old_dir}")
+        except Exception:
+            pass
+
 
 # Must be called before any multiprocessing-spawning code is imported
 try:
@@ -85,12 +100,16 @@ def run_full_build(job_id: str, sec_files_dir: str, sec_parser_url: str,
     Full build pipeline:
       1. (Optional) Download source files from GCS to a temp dir
       2. Call sec-parser to parse files → structured JSON
-      3. Drop all Neo4j indexes
-      4. Build base graph from parsed documents (skips file reading)
-      5. Build entity indexes + community detection
-      6. Build chunk index
+      3. Reset Neo4j connections (close stale pool, open fresh driver)
+      4. Drop all Neo4j indexes
+      5. Build base graph from parsed documents (skips file reading)
+      6. Build entity indexes + community detection
+      7. Build chunk index
     """
-    import tempfile
+    # Clean up any temp dirs left over from previous failed runs
+    _cleanup_old_temp_dirs()
+
+    tmp_dir = None
     try:
         # Stage 1 (optional): pull files from GCS into a temp dir
         if gcs_bucket:
@@ -113,38 +132,50 @@ def run_full_build(job_id: str, sec_files_dir: str, sec_parser_url: str,
         )
         print(f"[runner] sec-parser returned {len(documents)} document(s)")
 
-        # Lazy imports after mp.set_start_method
+        # Reset Neo4j connections before any DB work — closes the stale pool
+        # that has been sitting idle since service startup and opens a fresh one.
+        from graphrag_agent.config.neo4jdb import db_manager
         from graphrag_agent.graph.core import connection_manager
         from graphrag_agent.integrations.build.build_graph import KnowledgeGraphBuilder
         from graphrag_agent.integrations.build.build_index_and_community import IndexCommunityBuilder
         from graphrag_agent.integrations.build.build_chunk_index import ChunkIndexBuilder
 
-        # Stage 2: drop indexes
+        db_manager.reset()
+        connection_manager.reset()
+
+        # Stage 3: drop indexes
         job_store.update(job_id, stage="drop_indexes")
         connection_manager.drop_all_indexes()
 
-        # Stage 3: build base graph from parsed documents
+        # Stage 4: build base graph from parsed documents
         job_store.update(job_id, stage="build_graph")
         graph_builder = KnowledgeGraphBuilder()
         graph_builder.build_from_documents(documents)
 
-        # Stage 4: index entities + community detection
+        # Stage 5: index entities + community detection
         job_store.update(job_id, stage="index_community")
         index_builder = IndexCommunityBuilder()
         index_builder.process()
 
-        # Stage 5: chunk index
+        # Stage 6: chunk index
         job_store.update(job_id, stage="chunk_index")
         chunk_builder = ChunkIndexBuilder()
         chunk_builder.process()
 
         job_store.mark_completed(job_id, stats={
             "documents_parsed": len(documents),
-            "stages_completed": 5,
+            "stages_completed": 6,
         })
 
-    except Exception as exc:
-        job_store.mark_failed(job_id, error=traceback.format_exc())
+    except Exception:
+        err = traceback.format_exc()
+        print(f"[runner] build {job_id} FAILED:\n{err}")
+        job_store.mark_failed(job_id, error=err)
+
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            print(f"[runner] cleaned up temp dir: {tmp_dir}")
 
 
 def run_incremental_build(job_id: str, files_dir: str, registry_path: str):
@@ -166,5 +197,7 @@ def run_incremental_build(job_id: str, files_dir: str, registry_path: str):
             "total_time": stats.get("total_time", 0),
         })
 
-    except Exception as exc:
-        job_store.mark_failed(job_id, error=traceback.format_exc())
+    except Exception:
+        err = traceback.format_exc()
+        print(f"[runner] incremental build {job_id} FAILED:\n{err}")
+        job_store.mark_failed(job_id, error=err)

@@ -60,10 +60,10 @@ jobs:
             --no-allow-unauthenticated \
             --memory=4Gi \
             --cpu=2 \
-            --min-instances=0 \
-            --max-instances=5 \
+            --min-instances=1 \
+            --max-instances=1 \
             --port=8004 \
-            --cpu-boost \
-            --timeout=300 \
-            --update-env-vars="BUILD_SERVICE_PORT=8004,BUILD_SERVICE_RELOAD=false,BUILD_SERVICE_LOG_LEVEL=info" \
+            --no-cpu-throttling \
+            --timeout=3600 \
+            --update-env-vars="BUILD_SERVICE_PORT=8004,BUILD_SERVICE_RELOAD=false,BUILD_SERVICE_LOG_LEVEL=info,MAX_WORKERS=8" \
             --quiet

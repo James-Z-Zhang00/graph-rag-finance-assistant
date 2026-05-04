@@ -12,14 +12,26 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from routers.health import router as health_router
-from routers.build import router as build_router
+from routers.build import router as build_router, _executor
 from routers.files import router as files_router
 from config.settings import BUILD_SERVICE_HOST, BUILD_SERVICE_PORT, BUILD_SERVICE_RELOAD, BUILD_SERVICE_LOG_LEVEL
 
-app = FastAPI(title="Build Service", description="Graph build pipeline microservice")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # On shutdown (SIGTERM from Cloud Run), wait for any running build thread to finish
+    # before the container exits so we don't lose a build mid-flight.
+    print("[main] shutdown: waiting for background build thread to finish...")
+    _executor.shutdown(wait=True, cancel_futures=False)
+    print("[main] shutdown: build thread done")
+
+
+app = FastAPI(title="Build Service", description="Graph build pipeline microservice", lifespan=lifespan)
 
 app.include_router(health_router)
 app.include_router(build_router)
