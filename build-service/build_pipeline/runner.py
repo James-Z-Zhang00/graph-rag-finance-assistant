@@ -42,7 +42,7 @@ except RuntimeError:
 from build_pipeline.job_store import job_store
 
 # Keep each multipart POST well under Cloud Run's 32 MB request-body limit.
-_PARSE_BATCH_BYTES = 5 * 1024 * 1024   # 5 MB — halved to reduce peak memory per batch in sec-parser
+_PARSE_BATCH_BYTES = 10 * 1024 * 1024  # 10 MB — keep well under Cloud Run's 32 MB request-body limit
 _PARSE_BATCH_RETRIES = 5
 _PARSE_BATCH_RETRY_DELAY = 60          # seconds — Cloud Run needs ~60s to restart after OOM
 
