@@ -42,7 +42,37 @@ except RuntimeError:
 from build_pipeline.job_store import job_store
 
 # Keep each multipart POST well under Cloud Run's 32 MB request-body limit.
-_PARSE_BATCH_BYTES = 10 * 1024 * 1024  # 10 MB — smaller batches reduce per-batch memory pressure
+_PARSE_BATCH_BYTES = 5 * 1024 * 1024   # 5 MB — halved to reduce peak memory per batch in sec-parser
+_PARSE_BATCH_RETRIES = 5
+_PARSE_BATCH_RETRY_DELAY = 60          # seconds — Cloud Run needs ~60s to restart after OOM
+
+
+def _post_batch(parse_url: str, batch: list, base: Path, auth_headers: dict, timeout: int) -> list:
+    """POST one batch to sec-parser with retries. Returns the documents list."""
+    import time
+    import requests
+
+    for attempt in range(_PARSE_BATCH_RETRIES):
+        upload_files = []
+        open_handles = []
+        for p in batch:
+            flat_name = str(p.relative_to(base)).replace("/", "_").replace("\\", "_")
+            fh = open(p, "rb")
+            open_handles.append(fh)
+            upload_files.append(("files", (flat_name, fh, "application/octet-stream")))
+        try:
+            resp = requests.post(parse_url, files=upload_files, headers=auth_headers, timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()["documents"]
+        except Exception as exc:
+            if attempt == _PARSE_BATCH_RETRIES - 1:
+                raise
+            wait = _PARSE_BATCH_RETRY_DELAY * (2 ** attempt)  # 60s, 120s, 240s, 480s
+            print(f"[runner] sec-parser batch failed ({exc}), retry {attempt + 1}/{_PARSE_BATCH_RETRIES - 1} in {wait}s")
+            time.sleep(wait)
+        finally:
+            for fh in open_handles:
+                fh.close()
 
 
 def _parse_files_in_batches(
@@ -55,9 +85,9 @@ def _parse_files_in_batches(
     """
     Upload files to sec-parser in size-bounded batches and return all documents.
     Splitting avoids Cloud Run's 32 MB per-request body limit.
+    Each batch is retried up to 5 times with exponential backoff so a transient
+    503 (sec-parser OOM restart) doesn't abort the entire build.
     """
-    import requests
-
     # Group files into batches that stay under the size cap.
     batches: list[list] = []
     current_batch: list = []
@@ -76,20 +106,9 @@ def _parse_files_in_batches(
     all_documents: list = []
     for i, batch in enumerate(batches):
         print(f"[runner] sec-parse batch {i + 1}/{len(batches)} ({len(batch)} file(s))")
-        upload_files = []
-        open_handles = []
-        for p in batch:
-            flat_name = str(p.relative_to(base)).replace("/", "_").replace("\\", "_")
-            fh = open(p, "rb")
-            open_handles.append(fh)
-            upload_files.append(("files", (flat_name, fh, "application/octet-stream")))
-        try:
-            resp = requests.post(parse_url, files=upload_files, headers=auth_headers, timeout=timeout)
-            resp.raise_for_status()
-            all_documents.extend(resp.json()["documents"])
-        finally:
-            for fh in open_handles:
-                fh.close()
+        docs = _post_batch(parse_url, batch, base, auth_headers, timeout)
+        all_documents.extend(docs)
+        print(f"[runner] sec-parse batch {i + 1}/{len(batches)} done — {len(docs)} document(s)")
 
     return all_documents
 
