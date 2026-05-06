@@ -4,7 +4,9 @@ POST /search/hybrid/stream  — streaming search (plain text chunks)
 """
 
 import asyncio
+import json
 import logging
+import sys
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,6 +16,10 @@ from models import SearchRequest, SearchResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _gcp_log(severity: str, **fields):
+    print(json.dumps({"severity": severity, **fields}), flush=True, file=sys.stdout)
 
 
 @router.post("/search/hybrid", response_model=SearchResponse)
@@ -33,10 +39,20 @@ async def search_hybrid(request: SearchRequest):
             audit_id=result.get("audit_id"),
             contexts=result.get("contexts"),
         )
-        logger.info("session=%s quality_score=%s answer=%s", request.session_id, response.quality_score, response.answer)
+        _gcp_log("INFO",
+            message="search response",
+            session_id=request.session_id,
+            query=request.query,
+            quality_score=response.quality_score,
+            answer=response.answer,
+        )
         return response
     except Exception as exc:
-        logger.error("hybrid search error session=%s: %s", request.session_id, exc)
+        _gcp_log("ERROR",
+            message="hybrid search error",
+            session_id=request.session_id,
+            error=str(exc),
+        )
         raise HTTPException(status_code=500, detail=str(exc))
 
 
