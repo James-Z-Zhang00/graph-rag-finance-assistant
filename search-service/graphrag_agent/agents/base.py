@@ -5,9 +5,12 @@ from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.message import add_messages
+import json
 import pprint
+import sys
 import time
 import asyncio
+import traceback
 
 from graphrag_agent.models.get_models import get_llm_model, get_stream_llm_model, get_embeddings_model
 from graphrag_agent.cache_manager.manager import (
@@ -487,6 +490,7 @@ class BaseAgent(ABC):
             }
         except Exception as e:
             error_time = time.time() - process_start
+            print(json.dumps({"severity": "ERROR", "message": "ask_with_trace failed", "error": str(e), "traceback": traceback.format_exc()}), flush=True, file=sys.stdout)
             return {
                 "answer": f"Sorry, an error occurred while processing your question. Please try again later or rephrase your question. Error details: {str(e)}",
                 "execution_log": self.execution_log + [{"node": "error", "timestamp": time.time(), "output": str(e)}]
