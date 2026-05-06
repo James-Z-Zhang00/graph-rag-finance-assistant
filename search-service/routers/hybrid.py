@@ -25,7 +25,7 @@ async def search_hybrid(request: SearchRequest):
         result = await asyncio.to_thread(
             agent.ask_with_trace, request.query, thread_id=request.session_id
         )
-        return SearchResponse(
+        response = SearchResponse(
             answer=result["answer"],
             execution_log=result.get("execution_log") if request.debug else None,
             citations=result.get("citations"),
@@ -33,6 +33,8 @@ async def search_hybrid(request: SearchRequest):
             audit_id=result.get("audit_id"),
             contexts=result.get("contexts"),
         )
+        logger.info("session=%s quality_score=%s answer=%s", request.session_id, response.quality_score, response.answer)
+        return response
     except Exception as exc:
         logger.error("hybrid search error session=%s: %s", request.session_id, exc)
         raise HTTPException(status_code=500, detail=str(exc))
