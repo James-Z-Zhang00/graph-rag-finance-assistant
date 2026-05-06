@@ -417,9 +417,10 @@ class HybridAgent(BaseAgent):
 
     def _extract_keywords(self, query: str) -> Dict[str, List[str]]:
         """Extract query keywords"""
-        cached_keywords = self.cache_manager.get(f"keywords:{query}")
-        if cached_keywords:
-            return cached_keywords
+        if not CACHE_DISABLED:
+            cached_keywords = self.cache_manager.get(f"keywords:{query}")
+            if cached_keywords:
+                return cached_keywords
 
         try:
             keywords = self.search_tool.extract_keywords(query)

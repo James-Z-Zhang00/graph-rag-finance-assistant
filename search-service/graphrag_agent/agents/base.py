@@ -44,7 +44,7 @@ class BaseAgent(ABC):
         self.memory = MemorySaver()
         self.execution_log = []
 
-        if CACHE_BACKEND_TYPE == "upstash":
+        if CACHE_BACKEND_TYPE == "upstash" and not CACHE_DISABLED:
             self._init_upstash_cache()
         else:
             self._init_local_cache(cache_dir, memory_only)
