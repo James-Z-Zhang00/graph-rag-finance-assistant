@@ -1,6 +1,7 @@
 import re
 import time
 import json
+from datetime import date, timedelta
 from typing import List, Dict, Any, Tuple
 import pandas as pd
 from neo4j import Result
@@ -134,14 +135,14 @@ class HybridSearchTool(BaseSearchTool):
                     keywords = {
                         "high_level": [word for word in words if len(word) > 5 and word not in stopwords][:3],
                         "low_level": [word for word in words if 3 <= len(word) <= 5 and word not in stopwords][:5],
-                        "companies": [],
+                        "companies": [], "period_end": None, "period_type": None,
+                        "filing_type": None, "section": None, "fiscal_year": None,
                     }
                 else:
-                    # If not a string, return simple keywords based on original query
                     keywords = {
-                        "high_level": [query],
-                        "low_level": [],
-                        "companies": [],
+                        "high_level": [query], "low_level": [], "companies": [],
+                        "period_end": None, "period_type": None,
+                        "filing_type": None, "section": None, "fiscal_year": None,
                     }
 
             # Record LLM processing time
@@ -156,6 +157,16 @@ class HybridSearchTool(BaseSearchTool):
                 keywords["high_level"] = []
             if "companies" not in keywords:
                 keywords["companies"] = []
+            if "period_end" not in keywords:
+                keywords["period_end"] = None
+            if "period_type" not in keywords:
+                keywords["period_type"] = None
+            if "filing_type" not in keywords:
+                keywords["filing_type"] = None
+            if "section" not in keywords:
+                keywords["section"] = None
+            if "fiscal_year" not in keywords:
+                keywords["fiscal_year"] = None
 
             # Ensure list types
             if not isinstance(keywords["low_level"], list):
@@ -165,6 +176,20 @@ class HybridSearchTool(BaseSearchTool):
             if not isinstance(keywords["companies"], list):
                 keywords["companies"] = [str(keywords["companies"])]
 
+            # Validate and normalise scalar fields
+            if keywords["period_end"] and not re.match(r'^\d{4}-\d{2}-\d{2}$', str(keywords["period_end"])):
+                keywords["period_end"] = None
+            if keywords["period_type"] not in ("annual", "quarterly", "ytd", None):
+                keywords["period_type"] = None
+            if keywords["filing_type"] not in ("10k", "10q", None):
+                keywords["filing_type"] = None
+            if keywords["section"] not in self._SECTION_ITEM_MAP and keywords["section"] is not None:
+                keywords["section"] = None
+            try:
+                keywords["fiscal_year"] = str(int(keywords["fiscal_year"])) if keywords["fiscal_year"] else None
+            except (ValueError, TypeError):
+                keywords["fiscal_year"] = None
+
             # Cache result
             self.cache_manager.set(f"keywords:{query}", keywords)
 
@@ -172,8 +197,11 @@ class HybridSearchTool(BaseSearchTool):
 
         except Exception as e:
             print(f"Keyword extraction failed: {e}")
-            # Return default value based on original query
-            return {"low_level": [query], "high_level": [query.split()[0] if query.split() else query]}
+            return {
+                "low_level": [query], "high_level": [query.split()[0] if query.split() else query],
+                "companies": [], "period_end": None, "period_type": None,
+                "filing_type": None, "section": None, "fiscal_year": None,
+            }
 
     def db_query(self, cypher: str, params: Dict[str, Any] = {}) -> pd.DataFrame:
         """
@@ -239,7 +267,7 @@ class HybridSearchTool(BaseSearchTool):
             print(f"Text search also failed: {e}")
             return []
 
-    def _retrieve_low_level_content(self, query: str, keywords: List[str], company_terms: List[str] = []) -> Tuple[str, List[RetrievalResult]]:
+    def _retrieve_low_level_content(self, query: str, keywords: List[str], company_terms: List[str] = [], filing_type: str = None) -> Tuple[str, List[RetrievalResult]]:
         """
         Retrieve low-level content (specific entities and relationships).
 
@@ -339,25 +367,29 @@ class HybridSearchTool(BaseSearchTool):
         }) AS relationships
         """
 
-        # Fetch chunk info — join through __Document__ to enable company-scoped filtering
+        # Fetch chunk info — join through __Document__ to enable company and filing-type scoping
         _company_clause = (
             "AND ANY(comp IN $companies WHERE toLower(d.fileName) CONTAINS toLower(comp)) "
             if company_terms else ""
         )
+        _chunk_filing_clause = "AND toLower(d.fileName) CONTAINS $filing_type " if filing_type else ""
+
         chunk_query = (
             "MATCH (c:__Chunk__)-[:MENTIONS]->(e:__Entity__) "
             "MATCH (c)-[:PART_OF]->(d:__Document__) "
             "WHERE e.id IN $entity_ids "
-            + _company_clause +
-            "RETURN collect(DISTINCT {id: c.id, text: c.text})[0..5] AS chunks"
+            + _company_clause
+            + _chunk_filing_clause
+            + "RETURN collect(DISTINCT {id: c.id, text: c.text})[0..5] AS chunks"
         )
 
         # Fallback: text-match on chunk content using entity names (used when MENTIONS is missing)
         chunk_fallback_query = (
             "MATCH (c:__Chunk__)-[:PART_OF]->(d:__Document__) "
             "WHERE ANY(eid IN $entity_ids WHERE toLower(c.text) CONTAINS toLower(eid)) "
-            + _company_clause +
-            "RETURN collect(DISTINCT {id: c.id, text: c.text})[0..5] AS chunks"
+            + _company_clause
+            + _chunk_filing_clause
+            + "RETURN collect(DISTINCT {id: c.id, text: c.text})[0..5] AS chunks"
         )
 
         try:
@@ -367,7 +399,7 @@ class HybridSearchTool(BaseSearchTool):
             # Fetch relationship info
             relation_results = self.db_query(relation_query, {"entity_ids": entity_ids})
 
-            _chunk_params = {"entity_ids": entity_ids, "companies": company_terms}
+            _chunk_params = {"entity_ids": entity_ids, "companies": company_terms, "filing_type": filing_type or ""}
             # Fetch chunk info via MENTIONS; fall back to text-match if empty
             chunk_results = self.db_query(chunk_query, _chunk_params)
             _chunks_val = (chunk_results.iloc[0].get("chunks") if not chunk_results.empty else None) or []
@@ -463,6 +495,16 @@ class HybridSearchTool(BaseSearchTool):
             print(f"Entity query failed: {e}")
             return "Error querying entity information.", retrieval_results
 
+    # Maps LLM-extracted section names to SEC Item numbers stored on FilingSection nodes.
+    _SECTION_ITEM_MAP = {
+        "mda": "7",
+        "risk_factors": "1A",
+        "financials": "8",
+        "business": "1",
+        "legal": "3",
+        "market": "5",
+    }
+
     # Words too generic or too short to usefully match XBRL CamelCase concept names.
     _XBRL_SKIP_WORDS = frozenset({
         "a", "an", "the", "and", "or", "of", "in", "to", "by", "for",
@@ -470,7 +512,7 @@ class HybridSearchTool(BaseSearchTool):
         "net", "total", "gross", "per",
     })
 
-    def _retrieve_numeric_facts(self, query: str, keywords: List[str], company_terms: List[str] = []) -> Tuple[str, List[RetrievalResult]]:
+    def _retrieve_numeric_facts(self, query: str, keywords: List[str], company_terms: List[str] = [], period_end: str = None, filing_type: str = None, fiscal_year: str = None, period_type: str = None) -> Tuple[str, List[RetrievalResult]]:
         """
         Retrieve FinancialFact and Table nodes relevant to the query.
         Returns a formatted string for inclusion in the LLM prompt.
@@ -527,19 +569,49 @@ class HybridSearchTool(BaseSearchTool):
         )
         params["companies"] = company_terms
 
+        # Period-scoping clause: ±15-day window around the stated period_end date
+        _period_filter = ""
+        if period_end:
+            try:
+                dt = date.fromisoformat(period_end)
+                params["period_start"] = (dt - timedelta(days=15)).isoformat()
+                params["period_end_upper"] = (dt + timedelta(days=15)).isoformat()
+                _period_filter = "AND f.period_end >= $period_start AND f.period_end <= $period_end_upper "
+            except (ValueError, TypeError):
+                pass
+        elif fiscal_year:
+            # Fallback: filter by calendar year of period_end when no explicit date given
+            params["fiscal_year"] = str(fiscal_year)
+            _period_filter = "AND left(f.period_end, 4) = $fiscal_year "
+
+        # Period-type clause: distinguish YTD (nine months) from single-quarter results
+        _period_type_filter = ""
+        if period_type == "ytd":
+            _period_type_filter = "AND f.context_ref CONTAINS 'YTD' "
+        elif period_type == "quarterly":
+            _period_type_filter = "AND NOT f.context_ref CONTAINS 'YTD' "
+        # "annual" needs no context_ref filter — covered by period_end / fiscal_year
+
+        # Filing-type clause: 10k or 10q
+        _filing_filter = ""
+        if filing_type:
+            params["filing_type"] = filing_type
+            _filing_filter = "AND toLower(d.fileName) CONTAINS $filing_type "
+
         # --- FinancialFact nodes ---
         if keyword_conditions:
             fact_cypher = (
                 "MATCH (d:`__Document__`)-[:HAS_FACT]->(f:FinancialFact) "
                 "WHERE (" + " OR ".join(keyword_conditions) + ") "
-                + _doc_filter
+                + _doc_filter + _filing_filter + _period_filter + _period_type_filter
                 + f"RETURN {_fact_select} "
                 "ORDER BY f.period_end DESC, f.value DESC LIMIT $limit"
             )
         else:
+            _where_parts = [p.lstrip("AND ") for p in [_doc_filter, _filing_filter, _period_filter, _period_type_filter] if p]
             fact_cypher = (
                 "MATCH (d:`__Document__`)-[:HAS_FACT]->(f:FinancialFact) "
-                + ("WHERE " + _doc_filter.lstrip("AND ") if _doc_filter else "")
+                + ("WHERE " + " AND ".join(_where_parts) + " " if _where_parts else "")
                 + f"RETURN {_fact_select} "
                 "ORDER BY f.period_end DESC, f.value DESC LIMIT $limit"
             )
@@ -589,12 +661,16 @@ class HybridSearchTool(BaseSearchTool):
             "AND ANY(comp IN $companies WHERE toLower(d.fileName) CONTAINS toLower(comp)) "
             if company_terms else ""
         )
+        _table_filing_filter = ""
+        if filing_type:
+            table_params["filing_type"] = filing_type
+            _table_filing_filter = "AND toLower(d.fileName) CONTAINS $filing_type "
 
         if table_conditions:
             table_cypher = (
                 "MATCH (d:`__Document__`)-[:HAS_TABLE]->(t:Table) "
                 "WHERE (" + " OR ".join(table_conditions) + ") "
-                + _table_doc_filter
+                + _table_doc_filter + _table_filing_filter
                 + "RETURN d.fileName AS doc, t.table_id AS table_id, "
                 "t.caption AS caption, t.section AS section, t.source AS source, "
                 "t.content AS content "
@@ -719,7 +795,7 @@ class HybridSearchTool(BaseSearchTool):
             print(f"Community query failed: {e}")
             return "Error querying community information.", retrieval_results
 
-    def _retrieve_filing_sections(self, query: str, keywords: List[str], company_terms: List[str] = []) -> Tuple[str, List[RetrievalResult]]:
+    def _retrieve_filing_sections(self, query: str, keywords: List[str], company_terms: List[str] = [], filing_type: str = None, section: str = None) -> Tuple[str, List[RetrievalResult]]:
         """
         Retrieve FilingSection nodes that match query keywords.
 
@@ -754,10 +830,21 @@ class HybridSearchTool(BaseSearchTool):
         )
         params["companies"] = company_terms
 
+        _sec_filing_filter = ""
+        if filing_type:
+            params["filing_type"] = filing_type
+            _sec_filing_filter = "AND toLower(d.fileName) CONTAINS $filing_type "
+
+        _sec_section_filter = ""
+        item_num = self._SECTION_ITEM_MAP.get(section) if section else None
+        if item_num:
+            params["item_num"] = item_num
+            _sec_section_filter = "AND s.item = $item_num "
+
         section_cypher = (
             "MATCH (d:`__Document__`)-[:HAS_SECTION]->(s:FilingSection) "
             "WHERE (" + " OR ".join(keyword_conditions) + ") "
-            + _sec_doc_filter
+            + _sec_doc_filter + _sec_filing_filter + _sec_section_filter
             + "RETURN d.fileName AS doc, s.item AS item, s.title AS title, s.content AS content "
             "ORDER BY s.item "
             "LIMIT $limit"
@@ -808,17 +895,25 @@ class HybridSearchTool(BaseSearchTool):
         # Parse input
         if isinstance(query_input, dict) and "query" in query_input:
             query = query_input["query"]
-            # Support directly passing categorized keywords
             low_keywords = query_input.get("low_level_keywords", [])
             high_keywords = query_input.get("high_level_keywords", [])
             company_terms = query_input.get("companies", [])
+            period_end = query_input.get("period_end")
+            period_type = query_input.get("period_type")
+            filing_type = query_input.get("filing_type")
+            section = query_input.get("section")
+            fiscal_year = query_input.get("fiscal_year")
         else:
             query = str(query_input)
-            # Extract keywords
             keywords = self.extract_keywords(query)
             low_keywords = keywords.get("low_level", [])
             high_keywords = keywords.get("high_level", [])
             company_terms = keywords.get("companies", [])
+            period_end = keywords.get("period_end")
+            period_type = keywords.get("period_type")
+            filing_type = keywords.get("filing_type")
+            section = keywords.get("section")
+            fiscal_year = keywords.get("fiscal_year")
 
         # Check cache
         cache_key = query
@@ -844,15 +939,15 @@ class HybridSearchTool(BaseSearchTool):
                 section_parts, sections_evidence = [], []
 
                 for company in company_terms[:3]:
-                    ll, ev = self._retrieve_low_level_content(query, low_keywords, [company])
+                    ll, ev = self._retrieve_low_level_content(query, low_keywords, [company], filing_type)
                     low_parts.append(f"### {company}\n{ll}")
                     low_evidence.extend(ev)
 
-                    nf, ev = self._retrieve_numeric_facts(query, all_keywords, [company])
+                    nf, ev = self._retrieve_numeric_facts(query, all_keywords, [company], period_end, filing_type, fiscal_year, period_type)
                     numeric_parts.append(f"### {company}\n{nf}")
                     numeric_evidence.extend(ev)
 
-                    fs, ev = self._retrieve_filing_sections(query, all_keywords, [company])
+                    fs, ev = self._retrieve_filing_sections(query, all_keywords, [company], filing_type, section)
                     section_parts.append(f"### {company}\n{fs}")
                     sections_evidence.extend(ev)
 
@@ -865,16 +960,16 @@ class HybridSearchTool(BaseSearchTool):
 
             else:
                 # 1. Retrieve low-level content (entities and relationships)
-                low_level_content, low_evidence = self._retrieve_low_level_content(query, low_keywords, company_terms)
+                low_level_content, low_evidence = self._retrieve_low_level_content(query, low_keywords, company_terms, filing_type)
 
                 # 2. Retrieve high-level content (communities and themes)
                 high_level_content, high_evidence = self._retrieve_high_level_content(query, high_keywords, company_terms)
 
                 # 3. Retrieve structured numeric facts (FinancialFact + Table nodes)
-                numeric_facts_content, numeric_evidence = self._retrieve_numeric_facts(query, all_keywords, company_terms)
+                numeric_facts_content, numeric_evidence = self._retrieve_numeric_facts(query, all_keywords, company_terms, period_end, filing_type, fiscal_year, period_type)
 
                 # 4. Retrieve filing sections (FilingSection nodes)
-                filing_sections_content, sections_evidence = self._retrieve_filing_sections(query, all_keywords, company_terms)
+                filing_sections_content, sections_evidence = self._retrieve_filing_sections(query, all_keywords, company_terms, filing_type, section)
 
             # 5. Generate final answer
             llm_start = time.time()

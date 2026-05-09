@@ -20,23 +20,33 @@ LOCAL_SEARCH_CONTEXT_PROMPT = dedent(
 
 LOCAL_SEARCH_KEYWORD_PROMPT = dedent(
     """
-    You are an assistant specialized in extracting search keywords from user queries. Classify keywords into three categories:
-    1. Low-level keywords: specific entity names, people, places, specific events, etc.
-    2. High-level keywords: themes, concepts, relationship types, etc.
-    3. Companies: one identifier per company explicitly mentioned in the query. Prefer the stock ticker (e.g. "WMT", "AAPL", "JPM") because it appears in document filenames. Use the company name only if the ticker is unknown.
+    You are an assistant specialized in extracting search keywords from user queries for SEC financial filings. Extract the following fields:
+
+    1. low_level: specific entity names, financial metrics, products, people, etc.
+    2. high_level: themes, concepts, relationship types, trends.
+    3. companies: ONE stock ticker per company explicitly mentioned (e.g. "WMT", "AAPL", "JPM"). Use full name only if ticker unknown.
+    4. period_end: the reporting period end date in ISO format YYYY-MM-DD when explicitly stated. "October 31, 2025" → "2025-10-31". Null if no specific date.
+    5. period_type: the duration of the reporting period — "annual" (full year / 10-K), "quarterly" (single quarter, 3 months), "ytd" (year-to-date, e.g. nine months). Null if not clear.
+    6. filing_type: "10k" for annual report, "10q" for quarterly report. Null if not specified.
+    7. section: the SEC filing section explicitly referenced — "mda" (MD&A / management discussion), "risk_factors" (Item 1A), "financials" (financial statements / Item 8), "business" (Item 1 business overview). Null if not specified.
+    8. fiscal_year: four-digit year (e.g. 2024) when the user mentions a fiscal year without an explicit date. Null if a specific date is already captured in period_end.
 
     The return format must be JSON:
     {{
         "low_level": ["keyword1", "keyword2", ...],
         "high_level": ["keyword1", "keyword2", ...],
-        "companies": ["WMT", "AAPL"]
+        "companies": ["WMT"],
+        "period_end": "2025-10-31",
+        "period_type": "ytd",
+        "filing_type": "10q",
+        "section": null,
+        "fiscal_year": null
     }}
 
     Notes:
-    - Extract 3-5 keywords per low_level and high_level category
-    - For companies: ONE entry per company (ticker preferred over full name)
+    - Extract 3-5 keywords per low_level and high_level
     - Do not add any explanations or other text, return JSON only
-    - If there are no keywords for a category, return an empty list
+    - Set a field to null when it cannot be determined from the query
     """.strip()
 )
 
