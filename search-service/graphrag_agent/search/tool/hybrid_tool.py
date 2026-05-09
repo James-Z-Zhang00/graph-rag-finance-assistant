@@ -599,25 +599,33 @@ class HybridSearchTool(BaseSearchTool):
             _filing_filter = "AND toLower(d.fileName) CONTAINS $filing_type "
 
         # --- FinancialFact nodes ---
-        if keyword_conditions:
-            fact_cypher = (
+        # Build the strict query (all filters) and a fallback that drops the fragile
+        # filing_type and period_type filters (filename format varies per company/EDGAR).
+        def _build_fact_cypher(doc_f, filing_f, period_f, period_type_f):
+            kw_clause = "(" + " OR ".join(keyword_conditions) + ") " if keyword_conditions else ""
+            extra = doc_f + filing_f + period_f + period_type_f
+            if kw_clause:
+                where = f"WHERE {kw_clause}{extra}"
+            else:
+                parts = [p.lstrip("AND ") for p in [doc_f, filing_f, period_f, period_type_f] if p]
+                where = ("WHERE " + " AND ".join(parts) + " ") if parts else ""
+            return (
                 "MATCH (d:`__Document__`)-[:HAS_FACT]->(f:FinancialFact) "
-                "WHERE (" + " OR ".join(keyword_conditions) + ") "
-                + _doc_filter + _filing_filter + _period_filter + _period_type_filter
-                + f"RETURN {_fact_select} "
-                "ORDER BY f.period_end DESC, f.value DESC LIMIT $limit"
-            )
-        else:
-            _where_parts = [p.lstrip("AND ") for p in [_doc_filter, _filing_filter, _period_filter, _period_type_filter] if p]
-            fact_cypher = (
-                "MATCH (d:`__Document__`)-[:HAS_FACT]->(f:FinancialFact) "
-                + ("WHERE " + " AND ".join(_where_parts) + " " if _where_parts else "")
+                + where
                 + f"RETURN {_fact_select} "
                 "ORDER BY f.period_end DESC, f.value DESC LIMIT $limit"
             )
 
+        fact_cypher = _build_fact_cypher(_doc_filter, _filing_filter, _period_filter, _period_type_filter)
+        # Fallback: drop filing_type and period_type (fragile — depend on filename format / context_ref conventions)
+        fact_cypher_fallback = _build_fact_cypher(_doc_filter, "", _period_filter, "")
+        fallback_params = {k: v for k, v in params.items() if k != "filing_type"}
+
         try:
             fact_df = self.db_query(fact_cypher, params)
+            # If strict query returns nothing, retry without filing_type + period_type filters
+            if fact_df.empty and (_filing_filter or _period_type_filter):
+                fact_df = self.db_query(fact_cypher_fallback, fallback_params)
             if not fact_df.empty:
                 lines.append("### Financial Facts (XBRL)")
                 for _, row in fact_df.iterrows():
@@ -841,18 +849,26 @@ class HybridSearchTool(BaseSearchTool):
             params["item_num"] = item_num
             _sec_section_filter = "AND s.item = $item_num "
 
+        _sec_return = "RETURN d.fileName AS doc, s.item AS item, s.title AS title, s.content AS content ORDER BY s.item LIMIT $limit"
+        _sec_kw = "WHERE (" + " OR ".join(keyword_conditions) + ") "
         section_cypher = (
             "MATCH (d:`__Document__`)-[:HAS_SECTION]->(s:FilingSection) "
-            "WHERE (" + " OR ".join(keyword_conditions) + ") "
-            + _sec_doc_filter + _sec_filing_filter + _sec_section_filter
-            + "RETURN d.fileName AS doc, s.item AS item, s.title AS title, s.content AS content "
-            "ORDER BY s.item "
-            "LIMIT $limit"
+            + _sec_kw + _sec_doc_filter + _sec_filing_filter + _sec_section_filter
+            + _sec_return
         )
+        # Fallback: drop filing_type filter (filename format varies)
+        section_cypher_fallback = (
+            "MATCH (d:`__Document__`)-[:HAS_SECTION]->(s:FilingSection) "
+            + _sec_kw + _sec_doc_filter + _sec_section_filter
+            + _sec_return
+        )
+        sec_fallback_params = {k: v for k, v in params.items() if k != "filing_type"}
 
         sec_evidence: List[RetrievalResult] = []
         try:
             section_df = self.db_query(section_cypher, params)
+            if section_df.empty and _sec_filing_filter:
+                section_df = self.db_query(section_cypher_fallback, sec_fallback_params)
             if section_df.empty:
                 return "No relevant filing sections found.", sec_evidence
 
