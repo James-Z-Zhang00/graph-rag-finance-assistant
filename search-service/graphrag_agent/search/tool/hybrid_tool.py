@@ -133,13 +133,15 @@ class HybridSearchTool(BaseSearchTool):
                                 "in", "on", "at", "to", "for", "with", "by", "about", "of", "and", "or"}
                     keywords = {
                         "high_level": [word for word in words if len(word) > 5 and word not in stopwords][:3],
-                        "low_level": [word for word in words if 3 <= len(word) <= 5 and word not in stopwords][:5]
+                        "low_level": [word for word in words if 3 <= len(word) <= 5 and word not in stopwords][:5],
+                        "companies": [],
                     }
                 else:
                     # If not a string, return simple keywords based on original query
                     keywords = {
                         "high_level": [query],
-                        "low_level": []
+                        "low_level": [],
+                        "companies": [],
                     }
 
             # Record LLM processing time
@@ -152,12 +154,16 @@ class HybridSearchTool(BaseSearchTool):
                 keywords["low_level"] = []
             if "high_level" not in keywords:
                 keywords["high_level"] = []
+            if "companies" not in keywords:
+                keywords["companies"] = []
 
             # Ensure list types
             if not isinstance(keywords["low_level"], list):
                 keywords["low_level"] = [str(keywords["low_level"])]
             if not isinstance(keywords["high_level"], list):
                 keywords["high_level"] = [str(keywords["high_level"])]
+            if not isinstance(keywords["companies"], list):
+                keywords["companies"] = [str(keywords["companies"])]
 
             # Cache result
             self.cache_manager.set(f"keywords:{query}", keywords)
@@ -233,7 +239,7 @@ class HybridSearchTool(BaseSearchTool):
             print(f"Text search also failed: {e}")
             return []
 
-    def _retrieve_low_level_content(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
+    def _retrieve_low_level_content(self, query: str, keywords: List[str], company_terms: List[str] = []) -> Tuple[str, List[RetrievalResult]]:
         """
         Retrieve low-level content (specific entities and relationships).
 
@@ -250,11 +256,14 @@ class HybridSearchTool(BaseSearchTool):
         # First use keyword query to retrieve relevant entities
         entity_ids = []
 
-        if keywords:
+        # Merge company terms into entity keyword search so company-specific entities rank higher
+        entity_keywords = list(keywords) + [c for c in company_terms if c not in keywords]
+
+        if entity_keywords:
             keyword_params = {}
             keyword_conditions = []
 
-            for i, keyword in enumerate(keywords):
+            for i, keyword in enumerate(entity_keywords):
                 param_name = f"keyword{i}"
                 keyword_params[param_name] = keyword
                 keyword_conditions.append(f"e.id CONTAINS ${param_name} OR e.description CONTAINS ${param_name}")
@@ -267,6 +276,7 @@ class HybridSearchTool(BaseSearchTool):
                 RETURN e.id AS id
                 LIMIT $limit
                 """
+                keyword_params = {**keyword_params}  # copy
 
                 try:
                     keyword_results = self.db_query(keyword_query,
@@ -329,27 +339,26 @@ class HybridSearchTool(BaseSearchTool):
         }) AS relationships
         """
 
-        # Fetch chunk info
-        chunk_query = """
-        // Find text chunks that mention these entities
-        MATCH (c:__Chunk__)-[:MENTIONS]->(e:__Entity__)
-        WHERE e.id IN $entity_ids
-
-        RETURN collect(DISTINCT {
-            id: c.id,
-            text: c.text
-        })[0..5] AS chunks
-        """
+        # Fetch chunk info — join through __Document__ to enable company-scoped filtering
+        _company_clause = (
+            "AND ANY(comp IN $companies WHERE toLower(d.fileName) CONTAINS toLower(comp)) "
+            if company_terms else ""
+        )
+        chunk_query = (
+            "MATCH (c:__Chunk__)-[:MENTIONS]->(e:__Entity__) "
+            "MATCH (c)-[:PART_OF]->(d:__Document__) "
+            "WHERE e.id IN $entity_ids "
+            + _company_clause +
+            "RETURN collect(DISTINCT {id: c.id, text: c.text})[0..5] AS chunks"
+        )
 
         # Fallback: text-match on chunk content using entity names (used when MENTIONS is missing)
-        chunk_fallback_query = """
-        MATCH (c:__Chunk__)
-        WHERE ANY(eid IN $entity_ids WHERE toLower(c.text) CONTAINS toLower(eid))
-        RETURN collect(DISTINCT {
-            id: c.id,
-            text: c.text
-        })[0..5] AS chunks
-        """
+        chunk_fallback_query = (
+            "MATCH (c:__Chunk__)-[:PART_OF]->(d:__Document__) "
+            "WHERE ANY(eid IN $entity_ids WHERE toLower(c.text) CONTAINS toLower(eid)) "
+            + _company_clause +
+            "RETURN collect(DISTINCT {id: c.id, text: c.text})[0..5] AS chunks"
+        )
 
         try:
             # Fetch entity info
@@ -358,11 +367,12 @@ class HybridSearchTool(BaseSearchTool):
             # Fetch relationship info
             relation_results = self.db_query(relation_query, {"entity_ids": entity_ids})
 
+            _chunk_params = {"entity_ids": entity_ids, "companies": company_terms}
             # Fetch chunk info via MENTIONS; fall back to text-match if empty
-            chunk_results = self.db_query(chunk_query, {"entity_ids": entity_ids})
+            chunk_results = self.db_query(chunk_query, _chunk_params)
             _chunks_val = (chunk_results.iloc[0].get("chunks") if not chunk_results.empty else None) or []
             if not _chunks_val:
-                chunk_results = self.db_query(chunk_fallback_query, {"entity_ids": entity_ids})
+                chunk_results = self.db_query(chunk_fallback_query, _chunk_params)
 
             self.performance_metrics["query_time"] += time.time() - query_start
 
@@ -460,7 +470,7 @@ class HybridSearchTool(BaseSearchTool):
         "net", "total", "gross", "per",
     })
 
-    def _retrieve_numeric_facts(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
+    def _retrieve_numeric_facts(self, query: str, keywords: List[str], company_terms: List[str] = []) -> Tuple[str, List[RetrievalResult]]:
         """
         Retrieve FinancialFact and Table nodes relevant to the query.
         Returns a formatted string for inclusion in the LLM prompt.
@@ -510,18 +520,27 @@ class HybridSearchTool(BaseSearchTool):
         _fact_returns = ", ".join(f"f.{field} AS {field}" for field in FINANCIAL_FACT_WRITE_FIELDS)
         _fact_select = f"d.fileName AS doc, {_fact_returns}"
 
+        # Document-scoping clause: restrict to the queried company's filings when possible
+        _doc_filter = (
+            "AND ANY(comp IN $companies WHERE toLower(d.fileName) CONTAINS toLower(comp)) "
+            if company_terms else ""
+        )
+        params["companies"] = company_terms
+
         # --- FinancialFact nodes ---
         if keyword_conditions:
             fact_cypher = (
                 "MATCH (d:`__Document__`)-[:HAS_FACT]->(f:FinancialFact) "
-                "WHERE " + " OR ".join(keyword_conditions) +
-                f" RETURN {_fact_select} "
+                "WHERE (" + " OR ".join(keyword_conditions) + ") "
+                + _doc_filter
+                + f"RETURN {_fact_select} "
                 "ORDER BY f.period_end DESC, f.value DESC LIMIT $limit"
             )
         else:
             fact_cypher = (
                 "MATCH (d:`__Document__`)-[:HAS_FACT]->(f:FinancialFact) "
-                f"RETURN {_fact_select} "
+                + ("WHERE " + _doc_filter.lstrip("AND ") if _doc_filter else "")
+                + f"RETURN {_fact_select} "
                 "ORDER BY f.period_end DESC, f.value DESC LIMIT $limit"
             )
 
@@ -565,11 +584,18 @@ class HybridSearchTool(BaseSearchTool):
                 f" OR toLower(coalesce(t.section,'')) CONTAINS toLower(${p}))"
             )
 
+        table_params["companies"] = company_terms
+        _table_doc_filter = (
+            "AND ANY(comp IN $companies WHERE toLower(d.fileName) CONTAINS toLower(comp)) "
+            if company_terms else ""
+        )
+
         if table_conditions:
             table_cypher = (
                 "MATCH (d:`__Document__`)-[:HAS_TABLE]->(t:Table) "
-                "WHERE " + " OR ".join(table_conditions) +
-                " RETURN d.fileName AS doc, t.table_id AS table_id, "
+                "WHERE (" + " OR ".join(table_conditions) + ") "
+                + _table_doc_filter
+                + "RETURN d.fileName AS doc, t.table_id AS table_id, "
                 "t.caption AS caption, t.section AS section, t.source AS source, "
                 "t.content AS content "
                 "LIMIT $limit"
@@ -605,7 +631,7 @@ class HybridSearchTool(BaseSearchTool):
 
         return "\n".join(lines) if lines else "No structured numeric facts found.", evidence
 
-    def _retrieve_high_level_content(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
+    def _retrieve_high_level_content(self, query: str, keywords: List[str], company_terms: List[str] = []) -> Tuple[str, List[RetrievalResult]]:
         """
         Retrieve high-level content (communities and thematic concepts).
 
@@ -623,8 +649,12 @@ class HybridSearchTool(BaseSearchTool):
         keyword_conditions = []
         params = {"level": self.community_level, "limit": self.top_communities}
 
-        if keywords:
-            for i, keyword in enumerate(keywords):
+        # Include company names as additional community keyword conditions so
+        # company-specific communities are preferred when a company is named in the query.
+        combined_community_keywords = list(keywords) + [c for c in company_terms if c not in keywords]
+
+        if combined_community_keywords:
+            for i, keyword in enumerate(combined_community_keywords):
                 param_name = f"keyword{i}"
                 params[param_name] = keyword
                 keyword_conditions.append(f"c.summary CONTAINS ${param_name} OR c.full_content CONTAINS ${param_name}")
@@ -638,7 +668,6 @@ class HybridSearchTool(BaseSearchTool):
         if keyword_conditions:
             community_query += "WHERE " + " OR ".join(keyword_conditions)
         else:
-            # If no keywords, use query text directly
             params["query"] = query
             community_query += "WHERE c.summary CONTAINS $query OR c.full_content CONTAINS $query"
 
@@ -690,7 +719,7 @@ class HybridSearchTool(BaseSearchTool):
             print(f"Community query failed: {e}")
             return "Error querying community information.", retrieval_results
 
-    def _retrieve_filing_sections(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
+    def _retrieve_filing_sections(self, query: str, keywords: List[str], company_terms: List[str] = []) -> Tuple[str, List[RetrievalResult]]:
         """
         Retrieve FilingSection nodes that match query keywords.
 
@@ -719,10 +748,17 @@ class HybridSearchTool(BaseSearchTool):
                 " OR toLower(s.content) CONTAINS toLower($query))"
             )
 
+        _sec_doc_filter = (
+            "AND ANY(comp IN $companies WHERE toLower(d.fileName) CONTAINS toLower(comp)) "
+            if company_terms else ""
+        )
+        params["companies"] = company_terms
+
         section_cypher = (
             "MATCH (d:`__Document__`)-[:HAS_SECTION]->(s:FilingSection) "
-            "WHERE " + " OR ".join(keyword_conditions) +
-            " RETURN d.fileName AS doc, s.item AS item, s.title AS title, s.content AS content "
+            "WHERE (" + " OR ".join(keyword_conditions) + ") "
+            + _sec_doc_filter
+            + "RETURN d.fileName AS doc, s.item AS item, s.title AS title, s.content AS content "
             "ORDER BY s.item "
             "LIMIT $limit"
         )
@@ -775,12 +811,14 @@ class HybridSearchTool(BaseSearchTool):
             # Support directly passing categorized keywords
             low_keywords = query_input.get("low_level_keywords", [])
             high_keywords = query_input.get("high_level_keywords", [])
+            company_terms = query_input.get("companies", [])
         else:
             query = str(query_input)
             # Extract keywords
             keywords = self.extract_keywords(query)
             low_keywords = keywords.get("low_level", [])
             high_keywords = keywords.get("high_level", [])
+            company_terms = keywords.get("companies", [])
 
         # Check cache
         cache_key = query
@@ -796,18 +834,47 @@ class HybridSearchTool(BaseSearchTool):
             return cached_result
 
         try:
-            # 1. Retrieve low-level content (entities and relationships)
-            low_level_content, low_evidence = self._retrieve_low_level_content(query, low_keywords)
-
-            # 2. Retrieve high-level content (communities and themes)
-            high_level_content, high_evidence = self._retrieve_high_level_content(query, high_keywords)
-
-            # 3. Retrieve structured numeric facts (FinancialFact + Table nodes)
             all_keywords = list(dict.fromkeys(low_keywords + high_keywords))
-            numeric_facts_content, numeric_evidence = self._retrieve_numeric_facts(query, all_keywords)
 
-            # 4. Retrieve filing sections (FilingSection nodes)
-            filing_sections_content, sections_evidence = self._retrieve_filing_sections(query, all_keywords)
+            if len(company_terms) > 1:
+                # Multi-company comparison: retrieve once per company so results are balanced.
+                # Cap at 3 companies to keep Neo4j round-trips bounded.
+                low_parts, low_evidence = [], []
+                numeric_parts, numeric_evidence = [], []
+                section_parts, sections_evidence = [], []
+
+                for company in company_terms[:3]:
+                    ll, ev = self._retrieve_low_level_content(query, low_keywords, [company])
+                    low_parts.append(f"### {company}\n{ll}")
+                    low_evidence.extend(ev)
+
+                    nf, ev = self._retrieve_numeric_facts(query, all_keywords, [company])
+                    numeric_parts.append(f"### {company}\n{nf}")
+                    numeric_evidence.extend(ev)
+
+                    fs, ev = self._retrieve_filing_sections(query, all_keywords, [company])
+                    section_parts.append(f"### {company}\n{fs}")
+                    sections_evidence.extend(ev)
+
+                low_level_content = "\n\n".join(low_parts)
+                numeric_facts_content = "\n\n".join(numeric_parts)
+                filing_sections_content = "\n\n".join(section_parts)
+
+                # Communities are naturally cross-company — fetch once with all terms
+                high_level_content, high_evidence = self._retrieve_high_level_content(query, high_keywords, company_terms)
+
+            else:
+                # 1. Retrieve low-level content (entities and relationships)
+                low_level_content, low_evidence = self._retrieve_low_level_content(query, low_keywords, company_terms)
+
+                # 2. Retrieve high-level content (communities and themes)
+                high_level_content, high_evidence = self._retrieve_high_level_content(query, high_keywords, company_terms)
+
+                # 3. Retrieve structured numeric facts (FinancialFact + Table nodes)
+                numeric_facts_content, numeric_evidence = self._retrieve_numeric_facts(query, all_keywords, company_terms)
+
+                # 4. Retrieve filing sections (FilingSection nodes)
+                filing_sections_content, sections_evidence = self._retrieve_filing_sections(query, all_keywords, company_terms)
 
             # 5. Generate final answer
             llm_start = time.time()

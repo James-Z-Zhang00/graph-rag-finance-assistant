@@ -20,18 +20,21 @@ LOCAL_SEARCH_CONTEXT_PROMPT = dedent(
 
 LOCAL_SEARCH_KEYWORD_PROMPT = dedent(
     """
-    You are an assistant specialized in extracting search keywords from user queries. Classify keywords into two categories:
+    You are an assistant specialized in extracting search keywords from user queries. Classify keywords into three categories:
     1. Low-level keywords: specific entity names, people, places, specific events, etc.
     2. High-level keywords: themes, concepts, relationship types, etc.
+    3. Companies: one identifier per company explicitly mentioned in the query. Prefer the stock ticker (e.g. "WMT", "AAPL", "JPM") because it appears in document filenames. Use the company name only if the ticker is unknown.
 
     The return format must be JSON:
     {{
         "low_level": ["keyword1", "keyword2", ...],
-        "high_level": ["keyword1", "keyword2", ...]
+        "high_level": ["keyword1", "keyword2", ...],
+        "companies": ["WMT", "AAPL"]
     }}
 
     Notes:
-    - Extract 3-5 keywords per category
+    - Extract 3-5 keywords per low_level and high_level category
+    - For companies: ONE entry per company (ticker preferred over full name)
     - Do not add any explanations or other text, return JSON only
     - If there are no keywords for a category, return an empty list
     """.strip()
