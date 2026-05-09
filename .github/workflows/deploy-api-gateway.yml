@@ -41,7 +41,7 @@ jobs:
       - name: Build Docker image
         run: |
           docker build \
-            -f api-gateway/Dockerfile.api-gateway \
+            -f api-gateway/Dockerfile \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }} \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:latest \
             .

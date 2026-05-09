@@ -24,7 +24,7 @@ LOCAL_SEARCH_KEYWORD_PROMPT = dedent(
 
     1. low_level: specific entity names, financial metrics, products, people, etc.
     2. high_level: themes, concepts, relationship types, trends.
-    3. companies: ONE stock ticker per company explicitly mentioned (e.g. "WMT", "AAPL", "JPM"). Use full name only if ticker unknown.
+    3. companies: For each company mentioned include BOTH the stock ticker AND a short lowercase name variant so filename matching works regardless of format — e.g. ["WMT", "walmart"] for Walmart, ["AAPL", "apple"] for Apple, ["JPM", "jpmorgan"] for JPMorgan. Use lowercase for the name variant.
     4. period_end: the reporting period end date in ISO format YYYY-MM-DD when explicitly stated. "October 31, 2025" → "2025-10-31". Null if no specific date.
     5. period_type: the duration of the reporting period — "annual" (full year / 10-K), "quarterly" (single quarter, 3 months), "ytd" (year-to-date, e.g. nine months). Null if not clear.
     6. filing_type: "10k" for annual report, "10q" for quarterly report. Null if not specified.
@@ -35,7 +35,7 @@ LOCAL_SEARCH_KEYWORD_PROMPT = dedent(
     {{
         "low_level": ["keyword1", "keyword2", ...],
         "high_level": ["keyword1", "keyword2", ...],
-        "companies": ["WMT"],
+        "companies": ["WMT", "walmart"],
         "period_end": "2025-10-31",
         "period_type": "ytd",
         "filing_type": "10q",

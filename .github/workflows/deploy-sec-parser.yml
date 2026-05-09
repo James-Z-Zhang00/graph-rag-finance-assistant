@@ -41,7 +41,7 @@ jobs:
       - name: Build Docker image
         run: |
           docker build \
-            -f sec-parser/Dockerfile.sec-parser \
+            -f sec-parser/Dockerfile \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }} \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:latest \
             .

@@ -173,8 +173,15 @@ class HybridSearchTool(BaseSearchTool):
                 keywords["low_level"] = [str(keywords["low_level"])]
             if not isinstance(keywords["high_level"], list):
                 keywords["high_level"] = [str(keywords["high_level"])]
-            if not isinstance(keywords["companies"], list):
+            if keywords["companies"] is None:
+                keywords["companies"] = []
+            elif not isinstance(keywords["companies"], list):
                 keywords["companies"] = [str(keywords["companies"])]
+            # Strip null-ish entries the LLM occasionally produces (None, "", "null", "n/a")
+            keywords["companies"] = [
+                c for c in keywords["companies"]
+                if c and str(c).strip() and str(c).strip().lower() not in ("none", "null", "n/a")
+            ]
 
             # Validate and normalise scalar fields
             if keywords["period_end"] and not re.match(r'^\d{4}-\d{2}-\d{2}$', str(keywords["period_end"])):
@@ -267,6 +274,62 @@ class HybridSearchTool(BaseSearchTool):
             print(f"Text search also failed: {e}")
             return []
 
+    @staticmethod
+    def _group_company_terms(company_terms: List[str]) -> List[List[str]]:
+        """
+        Group a flat company_terms list into per-logical-company sublists.
+
+        Convention from the keyword extraction prompt:
+          ["WMT", "walmart", "AAPL", "apple"]  →  [["WMT","walmart"], ["AAPL","apple"]]
+
+        Pairing rule: a consecutive (UPPERCASE, lowercase) pair is treated as one company
+        (ticker + name variant).  Any entry that doesn't fit the pair pattern becomes its own
+        single-element group so the logic degrades gracefully on unexpected LLM output.
+        """
+        if not company_terms:
+            return []
+        groups: List[List[str]] = []
+        i = 0
+        while i < len(company_terms):
+            t = company_terms[i]
+            # Pair: current is all-uppercase ticker (letters + ./- allowed: BRK/A, BRK.B)
+            # AND next is all-lowercase name variant.
+            _is_ticker = t == t.upper() and len(t) <= 6 and any(c.isalpha() for c in t)
+            if (
+                i + 1 < len(company_terms)
+                and _is_ticker
+                and company_terms[i + 1] == company_terms[i + 1].lower()
+            ):
+                groups.append([t, company_terms[i + 1]])
+                i += 2
+            else:
+                groups.append([t])
+                i += 1
+        return groups
+
+    def _scope_entity_ids_to_company(self, entity_ids: List[str], company_terms: List[str]) -> List[str]:
+        """
+        Filter a candidate entity ID list to those reachable from the queried company's
+        documents via __Chunk__ -[:MENTIONS]-> __Entity__ -[:PART_OF]-> __Document__.
+        Returns an empty list if none match (signals caller to fall back to unscoped).
+        """
+        if not company_terms or not entity_ids:
+            return entity_ids
+        try:
+            result = self.db_query(
+                "MATCH (c:__Chunk__)-[:PART_OF]->(d:__Document__) "
+                "MATCH (c)-[:MENTIONS]->(e:__Entity__) "
+                "WHERE e.id IN $entity_ids "
+                "AND ANY(comp IN $companies WHERE toLower(d.fileName) CONTAINS toLower(comp)) "
+                "RETURN DISTINCT e.id AS id",
+                {"entity_ids": entity_ids, "companies": company_terms},
+            )
+            if not result.empty:
+                return result["id"].tolist()
+        except Exception as e:
+            print(f"Entity company scope filter failed: {e}")
+        return []
+
     def _retrieve_low_level_content(self, query: str, keywords: List[str], company_terms: List[str] = [], filing_type: str = None) -> Tuple[str, List[RetrievalResult]]:
         """
         Retrieve low-level content (specific entities and relationships).
@@ -296,37 +359,71 @@ class HybridSearchTool(BaseSearchTool):
                 keyword_params[param_name] = keyword
                 keyword_conditions.append(f"e.id CONTAINS ${param_name} OR e.description CONTAINS ${param_name}")
 
-            # Build query
             if keyword_conditions:
-                keyword_query = """
-                MATCH (e:__Entity__)
-                WHERE """ + " OR ".join(keyword_conditions) + """
-                RETURN e.id AS id
-                LIMIT $limit
-                """
-                keyword_params = {**keyword_params}  # copy
+                kw_where = " OR ".join(keyword_conditions)
 
-                try:
-                    keyword_results = self.db_query(keyword_query,
-                                                {**keyword_params, "limit": self.entity_limit})
-                    if not keyword_results.empty:
-                        entity_ids = keyword_results['id'].tolist()
-                except Exception as e:
-                    print(f"Keyword query failed: {e}")
+                if company_terms:
+                    # Company-scoped: only find entities that appear in chunks belonging to
+                    # the queried company's documents.  This prevents JPMorgan entities
+                    # (e.g. "The Firm") from polluting Walmart queries.
+                    scoped_query = (
+                        "MATCH (c:__Chunk__)-[:PART_OF]->(d:__Document__) "
+                        "MATCH (c)-[:MENTIONS]->(e:__Entity__) "
+                        "WHERE ANY(comp IN $companies WHERE toLower(d.fileName) CONTAINS toLower(comp)) "
+                        "AND (" + kw_where + ") "
+                        "RETURN DISTINCT e.id AS id LIMIT $limit"
+                    )
+                    try:
+                        scoped_results = self.db_query(
+                            scoped_query,
+                            {**keyword_params, "companies": company_terms, "limit": self.entity_limit},
+                        )
+                        if not scoped_results.empty:
+                            entity_ids = scoped_results["id"].tolist()
+                            print(f"[entity-scope] scoped to {company_terms}: {entity_ids}")
+                    except Exception as e:
+                        print(f"Scoped entity query failed: {e}")
+
+                # Fallback to unscoped query when scoped search returns nothing or no company filter
+                if not entity_ids:
+                    unscoped_query = (
+                        "MATCH (e:__Entity__) WHERE " + kw_where + " RETURN e.id AS id LIMIT $limit"
+                    )
+                    try:
+                        keyword_results = self.db_query(unscoped_query,
+                                                        {**keyword_params, "limit": self.entity_limit})
+                        if not keyword_results.empty:
+                            entity_ids = keyword_results["id"].tolist()
+                            if company_terms:
+                                print(f"[entity-scope] scoped query empty, fell back to unscoped: {entity_ids}")
+                    except Exception as e:
+                        print(f"Keyword query failed: {e}")
 
         # If keyword search returns no results or no keywords provided, try vector search
         if not entity_ids:
             try:
                 vector_entity_ids = self._vector_search(query, limit=self.entity_limit)
                 if vector_entity_ids:
-                    entity_ids = vector_entity_ids
+                    if company_terms:
+                        scoped = self._scope_entity_ids_to_company(vector_entity_ids, company_terms)
+                        entity_ids = scoped if scoped else vector_entity_ids
+                        print(f"[entity-scope] vector→{'scoped' if scoped else 'unscoped-fallback'} {company_terms}: {entity_ids}")
+                    else:
+                        entity_ids = vector_entity_ids
             except Exception as e:
                 print(f"Vector search failed: {e}")
 
         # If still no entities, use basic text matching
         if not entity_ids:
             try:
-                entity_ids = self._fallback_text_search(query, limit=self.entity_limit)
+                fallback_ids = self._fallback_text_search(query, limit=self.entity_limit)
+                if fallback_ids:
+                    if company_terms:
+                        scoped = self._scope_entity_ids_to_company(fallback_ids, company_terms)
+                        entity_ids = scoped if scoped else fallback_ids
+                        print(f"[entity-scope] text→{'scoped' if scoped else 'unscoped-fallback'} {company_terms}: {entity_ids}")
+                    else:
+                        entity_ids = fallback_ids
             except Exception as e:
                 print(f"Text search failed: {e}")
 
@@ -580,9 +677,11 @@ class HybridSearchTool(BaseSearchTool):
             except (ValueError, TypeError):
                 pass
         elif fiscal_year:
-            # Fallback: filter by calendar year of period_end when no explicit date given
+            # Non-calendar-FYE companies (Walmart Jan 31, Apple Sep 30) have period_end
+            # in fiscal_year-1 for most quarters.  Include both years so no facts are missed.
             params["fiscal_year"] = str(fiscal_year)
-            _period_filter = "AND left(f.period_end, 4) = $fiscal_year "
+            params["fiscal_year_prev"] = str(int(fiscal_year) - 1)
+            _period_filter = "AND left(f.period_end, 4) IN [$fiscal_year, $fiscal_year_prev] "
 
         # Period-type clause: distinguish YTD (nine months) from single-quarter results
         _period_type_filter = ""
@@ -607,7 +706,8 @@ class HybridSearchTool(BaseSearchTool):
             if kw_clause:
                 where = f"WHERE {kw_clause}{extra}"
             else:
-                parts = [p.lstrip("AND ") for p in [doc_f, filing_f, period_f, period_type_f] if p]
+                # Use [4:] not lstrip — lstrip strips individual chars, not the substring "AND "
+                parts = [p[4:] if p.startswith("AND ") else p for p in [doc_f, filing_f, period_f, period_type_f] if p]
                 where = ("WHERE " + " AND ".join(parts) + " ") if parts else ""
             return (
                 "MATCH (d:`__Document__`)-[:HAS_FACT]->(f:FinancialFact) "
@@ -623,18 +723,42 @@ class HybridSearchTool(BaseSearchTool):
 
         try:
             fact_df = self.db_query(fact_cypher, params)
-            # If strict query returns nothing, retry without filing_type + period_type filters
+            # Pass 2: drop filing_type + period_type (filename conventions vary by company)
             if fact_df.empty and (_filing_filter or _period_type_filter):
                 fact_df = self.db_query(fact_cypher_fallback, fallback_params)
+            # Pass 3: drop company filter (filename may not contain the extracted company term)
+            if fact_df.empty and _doc_filter:
+                no_co_cypher = _build_fact_cypher("", "", _period_filter, "")
+                fact_df = self.db_query(no_co_cypher, fallback_params)
+                if not fact_df.empty:
+                    print(f"[fact-fallback] company filter empty, unscoped for {company_terms}")
             if not fact_df.empty:
                 lines.append("### Financial Facts (XBRL)")
                 for _, row in fact_df.iterrows():
                     period = row.get("period_end") or ""
-                    scale = row.get("scale")
-                    scale_note = f", scale: 10^{scale}" if scale is not None else ""
+                    raw_val = row.get("value")
+                    unit = row.get("unit") or ""
+                    # value is already the actual amount (parser computes raw × 10^scale at ingest).
+                    # Format it for human readability — never re-apply scale here.
+                    if raw_val is not None:
+                        try:
+                            actual = float(raw_val)
+                            if abs(actual) >= 1e9:
+                                human = f"{actual / 1e9:,.3f}B"
+                            elif abs(actual) >= 1e6:
+                                human = f"{actual / 1e6:,.3f}M"
+                            elif abs(actual) >= 1e3:
+                                human = f"{actual / 1e3:,.3f}K"
+                            else:
+                                human = f"{actual:,.2f}"
+                            display_val = f"{human} {unit}".strip()
+                        except (ValueError, TypeError):
+                            display_val = f"{raw_val} {unit}".strip()
+                    else:
+                        display_val = unit or "N/A"
                     lines.append(
-                        f"- [{row['doc']}] {row['name']}: {row['value']} {row.get('unit','') or ''} "
-                        f"(period: {period}, context: {row.get('context_ref','') or ''}{scale_note})"
+                        f"- [{row['doc']}] {row['name']}: {display_val}"
+                        f" (period: {period}, context: {row.get('context_ref','') or ''})"
                     )
                     fact_id = str(row.get("fact_id") or f"{row['name']}@{period}")
                     evidence.append(create_retrieval_result(
@@ -681,7 +805,7 @@ class HybridSearchTool(BaseSearchTool):
                 + _table_doc_filter + _table_filing_filter
                 + "RETURN d.fileName AS doc, t.table_id AS table_id, "
                 "t.caption AS caption, t.section AS section, t.source AS source, "
-                "t.content AS content "
+                "substring(t.content, 0, 2000) AS content "
                 "LIMIT $limit"
             )
             try:
@@ -730,41 +854,52 @@ class HybridSearchTool(BaseSearchTool):
         retrieval_results: List[RetrievalResult] = []
 
         # Build keyword conditions
-        keyword_conditions = []
         params = {"level": self.community_level, "limit": self.top_communities}
 
-        # Include company names as additional community keyword conditions so
-        # company-specific communities are preferred when a company is named in the query.
-        combined_community_keywords = list(keywords) + [c for c in company_terms if c not in keywords]
+        # __Community__ nodes have no document scope, so we do a two-pass:
+        # pass 1 — communities that mention the company AND match topic keywords
+        # pass 2 — topic keywords only (broad fallback when no company-specific communities found)
+        company_conditions = []
+        for i, company in enumerate(company_terms):
+            p = f"comp{i}"
+            params[p] = company
+            company_conditions.append(f"c.summary CONTAINS ${p} OR c.full_content CONTAINS ${p}")
 
+        keyword_conditions = []
+        combined_community_keywords = list(keywords) + [c for c in company_terms if c not in keywords]
         if combined_community_keywords:
             for i, keyword in enumerate(combined_community_keywords):
-                param_name = f"keyword{i}"
-                params[param_name] = keyword
-                keyword_conditions.append(f"c.summary CONTAINS ${param_name} OR c.full_content CONTAINS ${param_name}")
-
-        # Build community query
-        community_query = """
-        // Filter communities by keyword
-        MATCH (c:__Community__ {level: $level})
-        """
-
-        if keyword_conditions:
-            community_query += "WHERE " + " OR ".join(keyword_conditions)
+                p = f"keyword{i}"
+                params[p] = keyword
+                keyword_conditions.append(f"c.summary CONTAINS ${p} OR c.full_content CONTAINS ${p}")
         else:
             params["query"] = query
-            community_query += "WHERE c.summary CONTAINS $query OR c.full_content CONTAINS $query"
+            keyword_conditions.append("c.summary CONTAINS $query OR c.full_content CONTAINS $query")
 
-        # Add ordering and limit
-        community_query += """
-        WITH c
-        ORDER BY CASE WHEN c.community_rank IS NULL THEN 0 ELSE c.community_rank END DESC
-        LIMIT $limit
-        RETURN c.id AS id, c.summary AS summary, c.full_content AS full_content
-        """
+        _community_tail = (
+            " WITH c "
+            "ORDER BY CASE WHEN c.community_rank IS NULL THEN 0 ELSE c.community_rank END DESC "
+            "LIMIT $limit "
+            "RETURN c.id AS id, c.summary AS summary, c.full_content AS full_content"
+        )
+        _base = "MATCH (c:__Community__ {level: $level}) "
+        topic_where = " OR ".join(keyword_conditions)
+
+        if company_conditions:
+            company_where = " OR ".join(company_conditions)
+            community_query_strict = _base + f"WHERE ({company_where}) AND ({topic_where}) " + _community_tail
+            community_query_broad  = _base + f"WHERE {topic_where} " + _community_tail
+        else:
+            community_query_strict = None
+            community_query_broad  = _base + f"WHERE {topic_where} " + _community_tail
 
         try:
-            community_results = self.db_query(community_query, params)
+            community_results = (
+                self.db_query(community_query_strict, params)
+                if community_query_strict else pd.DataFrame()
+            )
+            if community_results.empty:
+                community_results = self.db_query(community_query_broad, params)
 
             self.performance_metrics["query_time"] += time.time() - query_start
 
@@ -849,7 +984,7 @@ class HybridSearchTool(BaseSearchTool):
             params["item_num"] = item_num
             _sec_section_filter = "AND s.item = $item_num "
 
-        _sec_return = "RETURN d.fileName AS doc, s.item AS item, s.title AS title, s.content AS content ORDER BY s.item LIMIT $limit"
+        _sec_return = "RETURN d.fileName AS doc, s.item AS item, s.title AS title, substring(s.content, 0, 3000) AS content ORDER BY s.item LIMIT $limit"
         _sec_kw = "WHERE (" + " OR ".join(keyword_conditions) + ") "
         section_cypher = (
             "MATCH (d:`__Document__`)-[:HAS_SECTION]->(s:FilingSection) "
@@ -864,11 +999,24 @@ class HybridSearchTool(BaseSearchTool):
         )
         sec_fallback_params = {k: v for k, v in params.items() if k != "filing_type"}
 
+        # Third-pass query: drop company filter (filename may not contain the company term)
+        section_cypher_no_co = (
+            "MATCH (d:`__Document__`)-[:HAS_SECTION]->(s:FilingSection) "
+            + _sec_kw + _sec_section_filter
+            + _sec_return
+        )
+
         sec_evidence: List[RetrievalResult] = []
         try:
             section_df = self.db_query(section_cypher, params)
+            # Pass 2: drop filing_type filter (filename format varies)
             if section_df.empty and _sec_filing_filter:
                 section_df = self.db_query(section_cypher_fallback, sec_fallback_params)
+            # Pass 3: drop company filter entirely
+            if section_df.empty and _sec_doc_filter:
+                section_df = self.db_query(section_cypher_no_co, sec_fallback_params)
+                if not section_df.empty:
+                    print(f"[section-fallback] company filter empty, unscoped for {company_terms}")
             if section_df.empty:
                 return "No relevant filing sections found.", sec_evidence
 
@@ -911,9 +1059,9 @@ class HybridSearchTool(BaseSearchTool):
         # Parse input
         if isinstance(query_input, dict) and "query" in query_input:
             query = query_input["query"]
-            low_keywords = query_input.get("low_level_keywords", [])
-            high_keywords = query_input.get("high_level_keywords", [])
-            company_terms = query_input.get("companies", [])
+            low_keywords = query_input.get("low_level_keywords") or []
+            high_keywords = query_input.get("high_level_keywords") or []
+            company_terms = query_input.get("companies") or []
             period_end = query_input.get("period_end")
             period_type = query_input.get("period_type")
             filing_type = query_input.get("filing_type")
@@ -931,14 +1079,16 @@ class HybridSearchTool(BaseSearchTool):
             section = keywords.get("section")
             fiscal_year = keywords.get("fiscal_year")
 
-        # Check cache
-        cache_key = query
-        if low_keywords or high_keywords:
-            cache_key = self.cache_manager.key_strategy.generate_key(
-                query,
-                low_level_keywords=low_keywords,
-                high_level_keywords=high_keywords
-            )
+        # Check cache — include all filters so different company/period queries don't collide
+        cache_key = self.cache_manager.key_strategy.generate_key(
+            query,
+            low_level_keywords=low_keywords,
+            high_level_keywords=high_keywords,
+            companies=sorted(company_terms) if company_terms else [],
+            period_end=period_end or "",
+            filing_type=filing_type or "",
+            fiscal_year=fiscal_year or "",
+        )
 
         cached_result = self.cache_manager.get(cache_key)
         if isinstance(cached_result, dict):
@@ -947,31 +1097,46 @@ class HybridSearchTool(BaseSearchTool):
         try:
             all_keywords = list(dict.fromkeys(low_keywords + high_keywords))
 
-            if len(company_terms) > 1:
-                # Multi-company comparison: retrieve once per company so results are balanced.
+            # Group company_terms into logical companies.
+            # The LLM now returns ["WMT", "walmart", "AAPL", "apple"] — two entries per company.
+            # Pairing rule: consecutive (UPPERCASE_ticker, lowercase_name) entries belong to one company.
+            # This prevents ["WMT", "walmart"] (length 2, one company) from triggering the
+            # multi-company comparison path.
+            company_groups = self._group_company_terms(company_terms)
+
+            if len(company_groups) > 1:
+                # Multi-company comparison: retrieve once per logical company.
                 # Cap at 3 companies to keep Neo4j round-trips bounded.
                 low_parts, low_evidence = [], []
                 numeric_parts, numeric_evidence = [], []
                 section_parts, sections_evidence = [], []
 
-                for company in company_terms[:3]:
-                    ll, ev = self._retrieve_low_level_content(query, low_keywords, [company], filing_type)
-                    low_parts.append(f"### {company}\n{ll}")
+                for group in company_groups[:3]:
+                    canonical = group[0]  # ticker or first term — used as section header
+                    other_groups = [g for g in company_groups[:3] if g is not group]
+                    other_cos = [t for g in other_groups for t in g]
+
+                    # Strip other companies' terms to prevent cross-company entity contamination
+                    per_co_low = [k for k in low_keywords if not any(o.lower() in k.lower() for o in other_cos)]
+                    per_co_all = [k for k in all_keywords if not any(o.lower() in k.lower() for o in other_cos)]
+
+                    ll, ev = self._retrieve_low_level_content(query, per_co_low, group, filing_type)
+                    low_parts.append(f"### {canonical}\n{ll}")
                     low_evidence.extend(ev)
 
-                    nf, ev = self._retrieve_numeric_facts(query, all_keywords, [company], period_end, filing_type, fiscal_year, period_type)
-                    numeric_parts.append(f"### {company}\n{nf}")
+                    nf, ev = self._retrieve_numeric_facts(query, per_co_all, group, period_end, filing_type, fiscal_year, period_type)
+                    numeric_parts.append(f"### {canonical}\n{nf}")
                     numeric_evidence.extend(ev)
 
-                    fs, ev = self._retrieve_filing_sections(query, all_keywords, [company], filing_type, section)
-                    section_parts.append(f"### {company}\n{fs}")
+                    fs, ev = self._retrieve_filing_sections(query, per_co_all, group, filing_type, section)
+                    section_parts.append(f"### {canonical}\n{fs}")
                     sections_evidence.extend(ev)
 
                 low_level_content = "\n\n".join(low_parts)
                 numeric_facts_content = "\n\n".join(numeric_parts)
                 filing_sections_content = "\n\n".join(section_parts)
 
-                # Communities are naturally cross-company — fetch once with all terms
+                # Communities span all companies — fetch once with the full flat term list
                 high_level_content, high_evidence = self._retrieve_high_level_content(query, high_keywords, company_terms)
 
             else:
@@ -988,6 +1153,10 @@ class HybridSearchTool(BaseSearchTool):
                 filing_sections_content, sections_evidence = self._retrieve_filing_sections(query, all_keywords, company_terms, filing_type, section)
 
             # 5. Generate final answer
+            print(f"[retrieval] low_level_content[:300]: {low_level_content[:300]}")
+            print(f"[retrieval] numeric_facts_content[:500]: {numeric_facts_content[:500]}")
+            print(f"[retrieval] filing_sections_content[:300]: {filing_sections_content[:300]}")
+
             llm_start = time.time()
 
             answer = self.query_chain.invoke({

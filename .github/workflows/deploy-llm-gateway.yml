@@ -41,7 +41,7 @@ jobs:
       - name: Build Docker image
         run: |
           docker build \
-            -f llm-gateway/Dockerfile.llm-gateway \
+            -f llm-gateway/Dockerfile \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }} \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:latest \
             .
