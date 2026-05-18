@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
-# [GDS] from graphdatascience import GraphDataScience  # GDS - commented out for Aura Free compatibility
+from graphdatascience import GraphDataScience
 from langchain_community.graphs import Neo4jGraph
 import psutil
 import os
@@ -9,15 +9,15 @@ from contextlib import contextmanager
 
 from graphrag_agent.config.settings import MAX_WORKERS, GDS_CONCURRENCY, GDS_MEMORY_LIMIT
 
+
 class BaseCommunityDetector(ABC):
     """Base class for community detection."""
 
-    def __init__(self, graph: Neo4jGraph, gds=None):
-        # [GDS] gds: GraphDataScience — re-enable and swap arg order when switching back to GDS
-        # [GDS] self.gds = gds
+    def __init__(self, graph: Neo4jGraph, gds: GraphDataScience = None):
+        self.gds = gds
         self.graph = graph
-        # [GDS] self.projection_name = "communities"
-        # [GDS] self.G = None
+        self.projection_name = "communities"
+        self.G = None
 
         # Performance statistics
         self.projection_time = 0
@@ -35,13 +35,9 @@ class BaseCommunityDetector(ABC):
 
     def _adjust_parameters(self):
         """Adjust runtime parameters."""
-        # Set concurrency
         self.max_concurrency = GDS_CONCURRENCY
-
-        # Use configured memory limit
         memory_gb = GDS_MEMORY_LIMIT
 
-        # Adjust limits based on configured memory size
         if memory_gb > 32:
             self.node_count_limit = 100000
             self.timeout_seconds = 600
@@ -53,20 +49,20 @@ class BaseCommunityDetector(ABC):
             self.timeout_seconds = 180
 
         print(f"Community detection parameters: CPU={MAX_WORKERS}, memory={memory_gb:.1f}GB, "
-            f"concurrency={self.max_concurrency}, node limit={self.node_count_limit}")
+              f"concurrency={self.max_concurrency}, node limit={self.node_count_limit}")
 
-    # [GDS] @contextmanager
-    # [GDS] def _graph_projection_context(self):
-    # [GDS]     """Context manager for graph projection."""
-    # [GDS]     try:
-    # [GDS]         projection_start = time.time()
-    # [GDS]         self.create_projection()
-    # [GDS]         self.projection_time = time.time() - projection_start
-    # [GDS]         yield
-    # [GDS]     finally:
-    # [GDS]         cleanup_start = time.time()
-    # [GDS]         self.cleanup()
-    # [GDS]         print(f"Graph projection cleanup complete in {time.time() - cleanup_start:.2f}s")
+    @contextmanager
+    def _graph_projection_context(self):
+        """Context manager for graph projection."""
+        try:
+            projection_start = time.time()
+            self.create_projection()
+            self.projection_time = time.time() - projection_start
+            yield
+        finally:
+            cleanup_start = time.time()
+            self.cleanup()
+            print(f"Graph projection cleanup complete in {time.time() - cleanup_start:.2f}s")
 
     def process(self) -> Dict[str, Any]:
         """Execute the full community detection pipeline."""
@@ -80,19 +76,17 @@ class BaseCommunityDetector(ABC):
         }
 
         try:
-            # [GDS] with self._graph_projection_context():  # GDS projection - commented out for Aura Free
-            # Pure Cypher: run detection directly without graph projection
-            detection_start = time.time()
-            detection_result = self.detect_communities()
-            self.detection_time = time.time() - detection_start
-            results['details']['detection'] = detection_result
+            with self._graph_projection_context():
+                detection_start = time.time()
+                detection_result = self.detect_communities()
+                self.detection_time = time.time() - detection_start
+                results['details']['detection'] = detection_result
 
-            save_start = time.time()
-            save_result = self.save_communities()
-            self.save_time = time.time() - save_start
-            results['details']['save'] = save_result
+                save_start = time.time()
+                save_result = self.save_communities()
+                self.save_time = time.time() - save_start
+                results['details']['save'] = save_result
 
-            # Add performance statistics
             total_time = time.time() - start_time
             results['performance'] = {
                 'totalTime': total_time,
@@ -111,9 +105,10 @@ class BaseCommunityDetector(ABC):
             })
             raise
 
-    # [GDS] def create_projection(self) -> Tuple[Any, Dict]:
-    # [GDS]     """Create graph projection."""
-    # [GDS]     pass
+    @abstractmethod
+    def create_projection(self) -> Tuple[Any, Dict]:
+        """Create graph projection."""
+        pass
 
     @abstractmethod
     def detect_communities(self) -> Dict[str, Any]:
@@ -125,13 +120,13 @@ class BaseCommunityDetector(ABC):
         """Save community results."""
         pass
 
-    # [GDS] def cleanup(self):
-    # [GDS]     """Clean up in-memory GDS projection graph."""
-    # [GDS]     if self.G:
-    # [GDS]         try:
-    # [GDS]             self.G.drop()
-    # [GDS]             print("Community projection graph cleaned up")
-    # [GDS]         except Exception as e:
-    # [GDS]             print(f"Error cleaning up projection graph: {e}")
-    # [GDS]         finally:
-    # [GDS]             self.G = None
+    def cleanup(self):
+        """Clean up in-memory GDS projection graph."""
+        if self.G:
+            try:
+                self.G.drop()
+                print("Community projection graph cleaned up")
+            except Exception as e:
+                print(f"Error cleaning up projection graph: {e}")
+            finally:
+                self.G = None
