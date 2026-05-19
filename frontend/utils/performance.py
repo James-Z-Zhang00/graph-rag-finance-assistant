@@ -297,57 +297,9 @@ def display_enhanced_performance_stats():
         if st.button("Apply Configuration", key="apply_perf_config"):
             st.success("Configuration updated")
 
-# Decorate API call functions
-def decorate_api_functions():
-    """Add performance monitoring decorators to API functions"""
-    try:
-        from frontend.utils.api import send_message, send_feedback, get_knowledge_graph, get_source_content
-
-        # Save originals
-        original_send_message = send_message
-        original_send_feedback = send_feedback
-        original_get_knowledge_graph = get_knowledge_graph
-        original_get_source_content = get_source_content
-
-        # Wrap with monitoring decorator
-        @monitor_performance(endpoint="send_message")
-        def monitored_send_message(*args, **kwargs):
-            return original_send_message(*args, **kwargs)
-
-        @monitor_performance(endpoint="send_feedback")
-        def monitored_send_feedback(*args, **kwargs):
-            return original_send_feedback(*args, **kwargs)
-
-        @monitor_performance(endpoint="get_knowledge_graph")
-        def monitored_get_knowledge_graph(*args, **kwargs):
-            return original_get_knowledge_graph(*args, **kwargs)
-
-        @monitor_performance(endpoint="get_source_content")
-        def monitored_get_source_content(*args, **kwargs):
-            return original_get_source_content(*args, **kwargs)
-
-        # Replace originals
-        import frontend.utils.api
-        frontend.utils.api.send_message = monitored_send_message
-        frontend.utils.api.send_feedback = monitored_send_feedback
-        frontend.utils.api.get_knowledge_graph = monitored_get_knowledge_graph
-        frontend.utils.api.get_source_content = monitored_get_source_content
-
-        return True
-    except Exception as e:
-        print(f"Failed to decorate API functions: {e}")
-        return False
-
 # Initialize performance collection on app startup
 def init_performance_monitoring():
     """Initialize performance monitoring"""
-    # Get or create collector
     collector = get_performance_collector()
-
-    # Record page load
     collector.record_page_load()
-
-    # Decorate API functions
-    decorate_api_functions()
-
     return collector

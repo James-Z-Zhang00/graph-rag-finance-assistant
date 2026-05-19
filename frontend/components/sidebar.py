@@ -25,22 +25,7 @@ def display_sidebar():
         )
 
         st.session_state.use_stream = True
-
-        # deep_research_agent options — shown only when that agent is active
-        if st.session_state.get("agent_type") == "deep_research_agent":
-            show_thinking = st.checkbox("Show Reasoning Process",
-                                        value=st.session_state.get("show_thinking", False),
-                                        key="sidebar_show_thinking",
-                                        help="Show the AI's internal reasoning process")
-            st.session_state.show_thinking = show_thinking
-
-            use_deeper = st.checkbox("Use Enhanced Research Tool",
-                                     value=st.session_state.get("use_deeper_tool", True),
-                                     key="sidebar_use_deeper",
-                                     help="Enable community-aware and knowledge-graph-enhanced reasoning")
-            st.session_state.use_deeper_tool = use_deeper
-        else:
-            st.session_state.show_thinking = False
+        st.session_state.show_thinking = False
 
         st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
         st.button("🗑️ Clear Chat", key="clear_chat_system", on_click=clear_chat)

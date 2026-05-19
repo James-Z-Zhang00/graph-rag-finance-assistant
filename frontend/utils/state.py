@@ -47,6 +47,8 @@ def init_session_state():
         st.session_state.relation_to_update = None
     if 'use_chain_exploration' not in st.session_state:
         st.session_state.use_chain_exploration = DEFAULT_CHAIN_EXPLORATION
+    if 'search_model' not in st.session_state:
+        st.session_state.search_model = "Think"
     if 'cache' not in st.session_state:
         st.session_state.cache = {
             'source_info': {},

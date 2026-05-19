@@ -188,24 +188,25 @@ def display_chat_interface():
                                 st.info("Your feedback has been received.", icon="ℹ️")
 
 
-    # Unified input container: agent selector + text input in one box
-    _agent_labels = {
-        "hybrid_agent":         "Hybrid Search",
-        "deep_research_agent":  "Deep Research",
+    # Search model selector + text input
+    _model_options = ["Quick", "Think", "Think++"]
+    _model_to_agent = {
+        "Think": "hybrid_agent",
     }
-    _label_to_key = {v: k for k, v in _agent_labels.items()}
-    _labels = list(_agent_labels.values())
-    _current_label = _agent_labels.get(st.session_state.get("agent_type", "hybrid_agent"), "Hybrid Search")
+    _placeholder_models = {"Quick", "Think++"}
+    _current_model = st.session_state.get("search_model", "Think")
+    if _current_model not in _model_options:
+        _current_model = "Think"
 
     with st.form("chat_input_form", clear_on_submit=True, border=False):
-        col_agent, col_input, col_btn = st.columns([2, 8, 1])
-        with col_agent:
-            _selected_label = st.selectbox(
-                "Agent",
-                options=_labels,
-                index=_labels.index(_current_label),
+        col_model, col_input, col_btn = st.columns([2, 8, 1])
+        with col_model:
+            st.selectbox(
+                "Model",
+                options=_model_options,
+                index=_model_options.index(_current_model),
                 label_visibility="collapsed",
-                key="bottom_agent_label",
+                key="bottom_model_label",
             )
         with col_input:
             prompt = st.text_input(
@@ -216,10 +217,10 @@ def display_chat_interface():
         with col_btn:
             submitted = st.form_submit_button("➤", use_container_width=True)
 
-    # Sync agent type (internal key) from the selected display label
-    st.session_state.agent_type = _label_to_key.get(
-        st.session_state.get("bottom_agent_label", "Hybrid Search"), "hybrid_agent"
-    )
+    # Sync search_model and agent_type from the selected model
+    _selected_model = st.session_state.get("bottom_model_label", "Think")
+    st.session_state.search_model = _selected_model
+    st.session_state.agent_type = _model_to_agent.get(_selected_model, "hybrid_agent")
 
     # Block keyboard typing in the agent selectbox while keeping click-to-select functional
     components.html("""
@@ -267,6 +268,20 @@ def display_chat_interface():
         with st.chat_message("user"):
             st.write(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
+
+        # Placeholder models: show coming-soon message without hitting the API
+        if _selected_model in _placeholder_models:
+            placeholder_msg = f"**{_selected_model}** is coming soon. Please use **Think** in the meantime."
+            with st.chat_message("assistant"):
+                st.markdown(placeholder_msg)
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": placeholder_msg,
+                "message_id": str(uuid.uuid4()),
+            })
+            st.session_state.processing_lock = False
+            st.rerun()
+            return
 
         with st.chat_message("assistant"):
             try:
