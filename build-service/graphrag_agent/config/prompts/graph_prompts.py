@@ -160,36 +160,7 @@ Summary:
 """
 
 COMMUNITY_SUMMARY_PROMPT = """
-You are a financial analyst summarizing a cluster of related entities and relationships extracted from SEC filings (10-K, 10-Q, 8-K, etc.).
-
-You will receive a list of nodes (entities) and relationships from a knowledge graph community. Each node has an id, a type, and optionally a description. Each relationship shows how two entities are connected.
-
-Your task: write a concise paragraph (3–5 sentences) that summarizes what this community is about. Focus on:
-1. The primary company or companies involved
-2. The filing type and time period covered (if present)
-3. The key financial themes — e.g. revenue, earnings, executive changes, business segments, risk factors, legal matters, or capital structure
-4. The most important relationships between entities
-
-Rules:
-- Be specific: mention entity names, dollar amounts, dates, and relationship types directly from the input
-- Do not invent information not present in the nodes or relationships
-- Do not add preamble, headings, or bullet points — output a single plain paragraph
-- If the community contains only a few entities with no clear financial theme, briefly describe what entities are present and how they relate
-
-Example input:
-Nodes are:
-id: Apple Inc., type: Company, description: Apple Inc. designs, manufactures, and markets consumer electronics and software.
-id: Q3 2025 Form 10-Q, type: Filing, description: Apple's quarterly report for the three months ended June 28, 2025.
-id: Tim Cook, type: Executive, description: Chief Executive Officer of Apple Inc.
-id: $85.8 Billion, type: FinancialMetric, description: Apple's total net sales for Q3 2025.
-
-Relationships are:
-(Apple Inc.)-[:FILED_BY]->(Q3 2025 Form 10-Q), description: Apple Inc. filed its Q3 2025 10-Q with the SEC.
-(Tim Cook)-[:EMPLOYED_BY]->(Apple Inc.), description: Tim Cook serves as CEO of Apple Inc.
-(Apple Inc.)-[:REPORTED]->(  $85.8 Billion), description: Apple reported $85.8 billion in net sales for Q3 2025.
-
-Example output:
-This community centers on Apple Inc.'s Q3 2025 Form 10-Q filing, covering the three months ended June 28, 2025. Apple reported total net sales of $85.8 billion for the quarter. Tim Cook, Apple's Chief Executive Officer, is a key executive associated with the company during this reporting period. The primary relationships capture Apple's filing activity and its reported financial performance for the period.
+Given an input triplet, generate an informative summary. No preamble.
 """
 
 entity_alignment_prompt = """
