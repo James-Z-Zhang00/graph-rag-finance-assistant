@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from graphrag_agent.models.get_models import get_llm_model, get_embeddings_model
+from graphrag_agent.models.get_models import get_extraction_llm, get_embeddings_model
 from graphrag_agent.config.prompts import (
     system_template_build_graph,
     human_template_build_graph
@@ -84,7 +84,7 @@ class KnowledgeGraphBuilder:
             task = progress.add_task("[cyan]Initializing components...", total=4)
             
             # Initialize models
-            self.llm = get_llm_model()
+            self.llm = get_extraction_llm()
             self.embeddings = get_embeddings_model()
             progress.advance(task)
             

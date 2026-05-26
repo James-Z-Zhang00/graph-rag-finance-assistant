@@ -11,7 +11,7 @@ from langchain.prompts import (
     SystemMessagePromptTemplate
 )
 
-from graphrag_agent.models.get_models import get_llm_model
+from graphrag_agent.models.get_models import get_dedup_llm
 from graphrag_agent.config.prompts import system_template_build_index, user_template_build_index
 from graphrag_agent.config.settings import ENTITY_BATCH_SIZE, MAX_WORKERS as DEFAULT_MAX_WORKERS
 from graphrag_agent.graph.core import connection_manager, timer, get_performance_stats, print_performance_stats
@@ -35,7 +35,7 @@ class EntityMerger:
         self.graph = connection_manager.get_connection()
 
         # Get language model
-        self.llm = get_llm_model()
+        self.llm = get_dedup_llm()
 
         # Batch processing and parallelism parameters
         self.batch_size = batch_size or ENTITY_BATCH_SIZE

@@ -10,6 +10,9 @@ from graphrag_agent.config.settings import (
     TIKTOKEN_CACHE_DIR,
     OPENAI_EMBEDDING_CONFIG,
     OPENAI_LLM_CONFIG,
+    EXTRACTION_LLM_CONFIG,
+    DEDUP_LLM_CONFIG,
+    COMMUNITY_LLM_CONFIG,
     OPENAI_BASE_URL,
 )
 
@@ -61,12 +64,32 @@ def get_embeddings_model():
     return OpenAIEmbeddings(**config)
 
 
-def get_llm_model():
-    config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
+def _make_llm(config_dict: dict) -> ChatOpenAI:
+    config = {k: v for k, v in config_dict.items() if v is not None and v != ""}
     http_client = _make_oidc_http_client()
     if http_client:
         config["http_client"] = http_client
     return ChatOpenAI(**config)
+
+
+def get_llm_model():
+    return _make_llm(OPENAI_LLM_CONFIG)
+
+
+def get_extraction_llm():
+    """LLM for step 4: entity/relationship extraction from text chunks."""
+    return _make_llm(EXTRACTION_LLM_CONFIG)
+
+
+def get_dedup_llm():
+    """LLM for step 5: entity deduplication, merging, and alignment."""
+    return _make_llm(DEDUP_LLM_CONFIG)
+
+
+def get_community_llm():
+    """LLM for step 6: community summary generation."""
+    return _make_llm(COMMUNITY_LLM_CONFIG)
+
 
 def get_stream_llm_model():
     callback_handler = AsyncIteratorCallbackHandler()

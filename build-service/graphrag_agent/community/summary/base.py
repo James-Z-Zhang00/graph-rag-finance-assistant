@@ -3,7 +3,7 @@ from typing import List, Dict
 from langchain_community.graphs import Neo4jGraph
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from graphrag_agent.models.get_models import get_llm_model
+from graphrag_agent.models.get_models import get_community_llm
 import concurrent.futures
 import time
 
@@ -140,7 +140,7 @@ class BaseSummarizer(ABC):
     def __init__(self, graph: Neo4jGraph):
         """Initialize the base community summarizer."""
         self.graph = graph
-        self.llm = get_llm_model()
+        self.llm = get_community_llm()
         self.describer = BaseCommunityDescriber()
         self.ranker = BaseCommunityRanker(graph)
         self.storer = BaseCommunityStorer(graph)

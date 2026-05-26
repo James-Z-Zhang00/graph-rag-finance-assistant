@@ -2,7 +2,7 @@ import time
 from typing import List, Dict, Any, Optional
 
 from graphrag_agent.graph.core import connection_manager
-from graphrag_agent.models.get_models import get_llm_model
+from graphrag_agent.models.get_models import get_dedup_llm
 from graphrag_agent.config.settings import (
     ALIGNMENT_CONFLICT_THRESHOLD,
     ALIGNMENT_MIN_GROUP_SIZE
@@ -18,7 +18,7 @@ class EntityAligner:
 
     def __init__(self):
         self.graph = connection_manager.get_connection()
-        self.llm = get_llm_model()
+        self.llm = get_dedup_llm()
 
         # Performance statistics
         self.stats = {

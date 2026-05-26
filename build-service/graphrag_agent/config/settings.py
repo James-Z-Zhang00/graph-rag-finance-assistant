@@ -247,6 +247,16 @@ OPENAI_LLM_CONFIG = {
     "base_url": OPENAI_BASE_URL,
 }
 
+# Per-step model overrides — each defaults to OPENAI_LLM_MODEL when unset.
+# Set these to swap a cheaper/faster model into one step without touching the others.
+OPENAI_EXTRACTION_MODEL = os.getenv("OPENAI_EXTRACTION_MODEL") or OPENAI_LLM_MODEL
+OPENAI_DEDUP_MODEL = os.getenv("OPENAI_DEDUP_MODEL") or OPENAI_LLM_MODEL
+OPENAI_COMMUNITY_MODEL = os.getenv("OPENAI_COMMUNITY_MODEL") or OPENAI_LLM_MODEL
+
+EXTRACTION_LLM_CONFIG = {**OPENAI_LLM_CONFIG, "model": OPENAI_EXTRACTION_MODEL}
+DEDUP_LLM_CONFIG = {**OPENAI_LLM_CONFIG, "model": OPENAI_DEDUP_MODEL}
+COMMUNITY_LLM_CONFIG = {**OPENAI_LLM_CONFIG, "model": OPENAI_COMMUNITY_MODEL}
+
 # ===== Similar Entity Detection Parameters =====
 
 SIMILAR_ENTITY_SETTINGS = {
