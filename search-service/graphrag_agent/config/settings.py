@@ -307,6 +307,10 @@ GLOBAL_SEARCH_SETTINGS = {
 }
 
 NAIVE_SEARCH_TOP_K = _get_env_int("NAIVE_SEARCH_TOP_K", 3) or 3
+NAIVE_SEARCH_CANDIDATES = _get_env_int("NAIVE_SEARCH_CANDIDATES", 20) or 20  # pool size for vector + BM25 each
+NAIVE_RERANK_ENABLED = os.getenv("NAIVE_RERANK_ENABLED", "true").lower() in ("1", "true", "yes")
+NAIVE_RERANKER_MODEL = os.getenv("NAIVE_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+NAIVE_QUERY_REWRITE_ENABLED = os.getenv("NAIVE_QUERY_REWRITE_ENABLED", "false").lower() in ("1", "true", "yes")
 
 HYBRID_SEARCH_SETTINGS = {
     "entity_limit": _get_env_int("HYBRID_SEARCH_ENTITY_LIMIT", 15) or 15,

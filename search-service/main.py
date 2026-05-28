@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from routers import api_router
 from config.settings import UVICORN_CONFIG
 from hybrid_search_agent.agent import agent_pool
+from naive_search_agent.agent import naive_agent_pool
 
 app = FastAPI(
     title="Search Service",
@@ -34,6 +35,7 @@ app.include_router(api_router)
 @app.on_event("shutdown")
 def shutdown_event():
     agent_pool.close_all()
+    naive_agent_pool.close_all()
 
 
 if __name__ == "__main__":

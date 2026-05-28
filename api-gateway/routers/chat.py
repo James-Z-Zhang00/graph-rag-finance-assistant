@@ -29,9 +29,26 @@ def _auth_headers(audience: str) -> dict:
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_HYBRID_URL = f"{SEARCH_SERVICE_URL.rstrip('/')}/search/hybrid"
-_STREAM_URL = f"{SEARCH_SERVICE_URL.rstrip('/')}/search/hybrid/stream"
-_CLEAR_URL = f"{SEARCH_SERVICE_URL.rstrip('/')}/search/clear"
+_BASE = SEARCH_SERVICE_URL.rstrip("/")
+_SEARCH_URLS = {
+    "naive_agent": f"{_BASE}/search/naive",
+    "hybrid_agent": f"{_BASE}/search/hybrid",
+}
+_STREAM_URLS = {
+    "naive_agent": f"{_BASE}/search/naive/stream",
+    "hybrid_agent": f"{_BASE}/search/hybrid/stream",
+}
+_CLEAR_URL = f"{_BASE}/search/clear"
+
+_DEFAULT_AGENT = "hybrid_agent"
+
+
+def _search_url(agent_type: str) -> str:
+    return _SEARCH_URLS.get(agent_type, _SEARCH_URLS[_DEFAULT_AGENT])
+
+
+def _stream_url(agent_type: str) -> str:
+    return _STREAM_URLS.get(agent_type, _STREAM_URLS[_DEFAULT_AGENT])
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -41,9 +58,10 @@ async def chat(request: ChatRequest):
         "session_id": request.session_id,
         "debug": request.debug,
     }
+    url = _search_url(request.agent_type)
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(_HYBRID_URL, json=payload, headers=_auth_headers(SEARCH_SERVICE_URL))
+            resp = await client.post(url, json=payload, headers=_auth_headers(SEARCH_SERVICE_URL))
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPStatusError as exc:
@@ -78,11 +96,12 @@ async def chat_stream(request: ChatRequest):
         "session_id": request.session_id,
         "debug": request.debug,
     }
+    url = _stream_url(request.agent_type)
 
     async def generate():
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
-                async with client.stream("POST", _STREAM_URL, json=payload, headers=_auth_headers(SEARCH_SERVICE_URL)) as resp:
+                async with client.stream("POST", url, json=payload, headers=_auth_headers(SEARCH_SERVICE_URL)) as resp:
                     resp.raise_for_status()
                     async for chunk in resp.aiter_text():
                         yield chunk

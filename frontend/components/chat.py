@@ -191,9 +191,10 @@ def display_chat_interface():
     # Search model selector + text input
     _model_options = ["Quick", "Think", "Think++"]
     _model_to_agent = {
+        "Quick": "naive_agent",
         "Think": "hybrid_agent",
     }
-    _placeholder_models = {"Quick", "Think++"}
+    _placeholder_models = {"Think++"}
     _current_model = st.session_state.get("search_model", "Think")
     if _current_model not in _model_options:
         _current_model = "Think"
