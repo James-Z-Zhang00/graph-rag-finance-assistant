@@ -197,6 +197,73 @@ def run_full_build(job_id: str, sec_files_dir: str, sec_parser_url: str,
             print(f"[runner] cleaned up temp dir: {tmp_dir}")
 
 
+def run_full_build_generic(job_id: str, files_dir: str,
+                           gcs_bucket: str = "", gcs_prefix: str = "medium/"):
+    """
+    Generic full build pipeline (no sec-parser).
+    Uses basic text extraction + tiktoken chunking on raw files instead of
+    the SEC-specific parser. Run this alongside run_full_build() on the same
+    file set to measure how much value sec-parser adds to graph quality.
+
+      1. (Optional) Download source files from GCS to a temp dir
+      2. Reset Neo4j connections
+      3. Drop all Neo4j indexes
+      4. Build base graph using generic DocumentProcessor (raw text + basic chunking)
+      5. Build entity indexes + community detection
+      6. Build chunk index
+    """
+    _cleanup_old_temp_dirs()
+
+    tmp_dir = None
+    try:
+        if gcs_bucket:
+            job_store.mark_running(job_id, stage="gcs_download")
+            tmp_dir = tempfile.mkdtemp(prefix="gcs-sec-files-")
+            from services.gcs_storage import download_prefix_to_dir
+            n = download_prefix_to_dir(gcs_bucket, gcs_prefix, tmp_dir)
+            print(f"[runner] downloaded {n} file(s) from gs://{gcs_bucket}/{gcs_prefix}")
+            files_dir = tmp_dir
+
+        from graphrag_agent.config.neo4jdb import db_manager
+        from graphrag_agent.graph.core import connection_manager
+        from graphrag_agent.integrations.build.build_graph import KnowledgeGraphBuilder
+        from graphrag_agent.integrations.build.build_index_and_community import IndexCommunityBuilder
+        from graphrag_agent.integrations.build.build_chunk_index import ChunkIndexBuilder
+
+        db_manager.reset()
+        connection_manager.reset()
+
+        job_store.mark_running(job_id, stage="drop_indexes")
+        connection_manager.drop_all_indexes()
+
+        job_store.update(job_id, stage="build_graph")
+        graph_builder = KnowledgeGraphBuilder()
+        graph_builder.build_base_graph(use_sec_pipeline=False, files_dir=files_dir)
+
+        job_store.update(job_id, stage="index_community")
+        index_builder = IndexCommunityBuilder()
+        index_builder.process()
+
+        job_store.update(job_id, stage="chunk_index")
+        chunk_builder = ChunkIndexBuilder()
+        chunk_builder.process()
+
+        job_store.mark_completed(job_id, stats={
+            "files_dir": files_dir,
+            "stages_completed": 5,
+        })
+
+    except Exception:
+        err = traceback.format_exc()
+        print(f"[runner] generic build {job_id} FAILED:\n{err}")
+        job_store.mark_failed(job_id, error=err)
+
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            print(f"[runner] cleaned up temp dir: {tmp_dir}")
+
+
 def run_incremental_build(job_id: str, files_dir: str, registry_path: str):
     """Execute incremental update pipeline."""
     try:

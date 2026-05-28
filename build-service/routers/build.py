@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 
 from models import TriggerResponse, JobResponse
 from build_pipeline.job_store import job_store
-from build_pipeline.runner import run_full_build, run_incremental_build, _auth_headers
+from build_pipeline.runner import run_full_build, run_full_build_generic, run_incremental_build, _auth_headers
 from config.settings import FILES_DIR, FILE_REGISTRY_PATH, SEC_PARSER_URL, SEC_FILES_DIR, GCS_BUCKET_NAME, GCS_FILES_PREFIX
 
 router = APIRouter(prefix="/build")
@@ -90,6 +90,25 @@ async def trigger_full_build():
     future = loop.run_in_executor(_executor, run_full_build, job.job_id, SEC_FILES_DIR, SEC_PARSER_URL, GCS_BUCKET_NAME, GCS_FILES_PREFIX)
     future.add_done_callback(_log_build_done)
     return TriggerResponse(job_id=job.job_id, message="Full build started")
+
+
+@router.post("/full-generic", response_model=TriggerResponse)
+async def trigger_full_build_generic():
+    """Trigger a full graph build using generic text extraction (no sec-parser).
+    Reads the same source files as /build/full but uses only basic tiktoken
+    chunking — no section detection, XBRL extraction, or table parsing.
+    Compare graph output against /build/full to measure sec-parser's impact."""
+    running = [j for j in job_store.list_all() if j["status"] == "running"]
+    if running:
+        raise HTTPException(status_code=409, detail=f"A build is already running: {running[0]['job_id']}")
+
+    job = job_store.create("full-generic")
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(
+        _executor, run_full_build_generic, job.job_id, SEC_FILES_DIR, GCS_BUCKET_NAME, GCS_FILES_PREFIX
+    )
+    future.add_done_callback(_log_build_done)
+    return TriggerResponse(job_id=job.job_id, message="Generic full build started (no sec-parser)")
 
 
 @router.post("/incremental", response_model=TriggerResponse)

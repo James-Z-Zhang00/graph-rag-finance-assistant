@@ -137,30 +137,40 @@ class KnowledgeGraphBuilder:
         minutes, seconds = divmod(remainder, 60)
         return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{int((seconds % 1) * 1000):03d}"
 
-    def build_base_graph(self) -> List:
+    def build_base_graph(
+        self,
+        use_sec_pipeline: bool | None = None,
+        files_dir: str | None = None,
+    ) -> List:
         """
         Build the base knowledge graph.
-        
+
+        Args:
+            use_sec_pipeline: Force SEC or generic processing. None = read from env.
+            files_dir: Directory to read source files from. None = use settings default.
+
         Returns:
             List: Processed file contents including file name, raw text, chunks, and results
         """
         self._display_stage_header("Build base knowledge graph")
 
+        if use_sec_pipeline is None:
+            use_sec_pipeline = os.getenv("SEC_PIPELINE_ENABLED", "true").lower() in ("1", "true", "yes")
+
         try:
             from graphrag_agent.pipelines.ingestion.document_processor import DocumentProcessor
-            self.document_processor = DocumentProcessor(FILES_DIR, CHUNK_SIZE, OVERLAP)
+            source_dir = files_dir or str(FILES_DIR)
+            self.document_processor = DocumentProcessor(source_dir, CHUNK_SIZE, OVERLAP)
 
             # 1. Process files (read + chunk)
             process_start = time.time()
             with self._create_progress() as progress:
                 task = progress.add_task("[cyan]Processing files...", total=1)
 
-                # Use SEC pipeline when enabled; otherwise use the default document processor.
-                sec_enabled = os.getenv("SEC_PIPELINE_ENABLED", "true").lower() in ("1", "true", "yes")
-                if sec_enabled:
+                if use_sec_pipeline:
                     from graphrag_agent.pipelines.sec.sec_filing_processor import SecFilingProcessor
-                    sec_files_dir = os.getenv("SEC_FILES_DIR", str(FILES_DIR))
-                    self.sec_processor = SecFilingProcessor(sec_files_dir, CHUNK_SIZE, OVERLAP)
+                    sec_source = files_dir or os.getenv("SEC_FILES_DIR", str(FILES_DIR))
+                    self.sec_processor = SecFilingProcessor(sec_source, CHUNK_SIZE, OVERLAP)
                     self.processed_documents = self.sec_processor.process_directory()
                 else:
                     self.processed_documents = self.document_processor.process_directory()

@@ -54,6 +54,8 @@ class FileReader:
             '.json': self._read_json,
             '.yaml': self._read_yaml,
             '.yml': self._read_yaml,
+            '.html': self._read_txt,
+            '.htm': self._read_txt,
         }
         
         # If no extensions are specified, use all supported extensions
