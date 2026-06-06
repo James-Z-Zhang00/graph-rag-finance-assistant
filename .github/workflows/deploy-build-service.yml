@@ -60,7 +60,7 @@ jobs:
             --no-allow-unauthenticated \
             --memory=16Gi \
             --cpu=8 \
-            --min-instances=1 \
+            --min-instances=0 \
             --max-instances=1 \
             --port=8004 \
             --no-cpu-throttling \
